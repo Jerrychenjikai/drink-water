@@ -16,18 +16,12 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// 计算当前点指向最近边缘的法线方向（决定折射偏移的方向）
-vec2 getRoundedBoxNormal(vec2 p, vec2 b) {
-    vec2 q = abs(p) - b;
-    vec2 n;
-    if (q.x > 0.0 && q.y > 0.0) {
-        n = normalize(q); // 角落区域沿着弧线法线
-    } else if (q.x > q.y) {
-        n = vec2(1.0, 0.0); // 左右直边
-    } else {
-        n = vec2(0.0, 1.0); // 上下直边
-    }
-    return n * sign(p);
+// 【关键修复】：利用 SDF 有限差分求梯度，获得精确且连续的向外法线向量
+vec2 getRoundedBoxNormal(vec2 p, vec2 b, float r) {
+    vec2 e = vec2(0.1, 0.0); // 0.1 像素微小偏移
+    float dx = sdRoundedBox(p + e.xy, b, r) - sdRoundedBox(p - e.xy, b, r);
+    float dy = sdRoundedBox(p + e.yx, b, r) - sdRoundedBox(p - e.yx, b, r);
+    return normalize(vec2(dx, dy));
 }
 
 void main() {
@@ -53,10 +47,10 @@ void main() {
         float t = 1.0 - (distFromEdge / u_edge_margin);
         
         // 高阶非线性过渡，让最靠里的地方衔接极度平滑，最外层边缘弯折剧烈
-        float factor = pow(t, 2.5);
+        float factor = pow(t, 7);
 
-        // 获取该点垂直于边缘向外的法线向量
-        vec2 normal = getRoundedBoxNormal(p, b);
+        // 利用 SDF 梯度计算法线方向（自动指向卡片外侧）
+        vec2 normal = getRoundedBoxNormal(p, b, r);
 
         // 沿法线方向做偏移计算
         lensOffset = normal * factor * u_intensity * 40.0;

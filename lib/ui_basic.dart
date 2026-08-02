@@ -97,7 +97,7 @@ class _LiquidGlassContainerState extends State<LiquidGlassContainer> {
                     offsetNotifier: _offsetNotifier, 
                     bgSize: widget.bgSize,
                     borderRadius: widget.borderRadius, 
-                    edgeMargin: widget.edgeMargin/2,
+                    edgeMargin: widget.edgeMargin/1.5,
                   ),
                 ),
               ),
