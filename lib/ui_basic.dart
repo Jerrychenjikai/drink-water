@@ -22,7 +22,7 @@ class LiquidGlassContainer extends StatefulWidget {
     this.edgeMargin = 30.0, // 默认边缘 30px 内发生畸变
     this.refractionShader,
     this.backgroundImage,
-    this.refractionIntensity = 0.08,
+    this.refractionIntensity = 10,
     this.bgSize = const Size(1000, 1000),
   });
 

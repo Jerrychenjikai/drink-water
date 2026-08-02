@@ -47,7 +47,7 @@ void main() {
         float t = 1.0 - (distFromEdge / u_edge_margin);
         
         // 高阶非线性过渡，让最靠里的地方衔接极度平滑，最外层边缘弯折剧烈
-        float factor = pow(t, 7);
+        float factor = pow(t, 4);
 
         // 利用 SDF 梯度计算法线方向（自动指向卡片外侧）
         vec2 normal = getRoundedBoxNormal(p, b, r);
