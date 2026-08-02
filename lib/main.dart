@@ -36,6 +36,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   ui.FragmentShader? _refractionShader;
   ui.Image? _backgroundImage;
+  bool background = false;
   
   // 记录上一次的窗口尺寸，用于对比是否发生了变化
   Size _lastSize = Size.zero;
@@ -91,7 +92,12 @@ class _HomePageState extends State<HomePage> {
     final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size.width, size.height));
     
     // 绘制棋盘格
-    CheckerboardPainter().paint(canvas, size);
+    if(background){
+      CheckerboardPainter().paint(canvas, size);
+    }
+    else{
+      GradientBackgroundPainter().paint(canvas, size);
+    }
     
     final picture = recorder.endRecording();
     return await picture.toImage(size.width.toInt(), size.height.toInt());
@@ -118,7 +124,7 @@ class _HomePageState extends State<HomePage> {
           // 1. 底层 UI 背景：使用棋盘格拼接色
           Positioned.fill(
             child: CustomPaint(
-              painter: CheckerboardPainter(),
+              painter: background ? CheckerboardPainter() : GradientBackgroundPainter(),
             ),
           ),
           
@@ -175,6 +181,14 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: (){
+          setState((){
+            background = !background;
+          });
+          _updateBackgroundTexture(screenSize);
+        }
+      ),
     );
   }
 
@@ -200,6 +214,29 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+/// 绘制蓝绿线性渐变背景的 Painter
+class GradientBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+
+    final paint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,      // 渐变起点（左上）
+        end: Alignment.bottomRight,   // 渐变终点（右下）
+        colors: [
+          Color(0xFF8EC5FC), // 原有颜色的浅蓝色
+          Color(0xFFE2F0CB), // 原有颜色的浅绿色
+        ],
+      ).createShader(rect);
+
+    canvas.drawRect(rect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// 绘制硬边缘拼接色的棋盘格 Painter
