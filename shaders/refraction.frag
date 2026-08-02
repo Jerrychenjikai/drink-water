@@ -1,29 +1,69 @@
 #include <flutter/runtime_effect.glsl>
 
-uniform vec2 u_container_size;   // 容器尺寸
-uniform vec2 u_container_offset; // 容器在屏幕上的左上角偏移 (x, y)
-uniform vec2 u_bg_size;          // 背景总尺寸
-uniform float u_intensity;       // 折射强度
-uniform sampler2D u_bg_texture;  // 背景纹理
+uniform vec2 u_container_size;   // 0, 1: 容器宽高
+uniform vec2 u_container_offset; // 2, 3: 实时屏幕坐标
+uniform vec2 u_bg_size;          // 4, 5: 背景图片宽高
+uniform float u_intensity;       // 6: 折射强度
+uniform float u_corner_radius;   // 7: 容器圆角半径
+uniform float u_edge_margin;     // 8: 边缘畸变带的宽度（像素）
+uniform sampler2D u_bg_texture;
 
 out vec4 fragColor;
 
+// 计算点 p 到圆角矩形边界的 SDF ( Signed Distance Function )
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// 计算当前点指向最近边缘的法线方向（决定折射偏移的方向）
+vec2 getRoundedBoxNormal(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    vec2 n;
+    if (q.x > 0.0 && q.y > 0.0) {
+        n = normalize(q); // 角落区域沿着弧线法线
+    } else if (q.x > q.y) {
+        n = vec2(1.0, 0.0); // 左右直边
+    } else {
+        n = vec2(0.0, 1.0); // 上下直边
+    }
+    return n * sign(p);
+}
+
 void main() {
-    // 当前像素在卡片内部的本地坐标
     vec2 localCoord = FlutterFragCoord().xy;
-    vec2 localUv = localCoord / u_container_size;
+    vec2 centerPos = u_container_size * 0.5;
+    
+    // 换算为以容器中心为原点的相对坐标
+    vec2 p = localCoord - centerPos;
+    
+    // 修正圆角半径，防止圆角大于宽高的一半
+    float r = min(u_corner_radius, min(centerPos.x, centerPos.y));
+    vec2 b = centerPos - vec2(r);
 
-    // 1. 纯平滑边缘透镜折射 (完全无表面波纹 ripples)
-    // 以中心点为基准，利用二次方让中心保持平整，仅在边缘产生平滑倒角偏折
-    vec2 center = localUv - vec2(0.5);
-    float dist = length(center);
-    vec2 lensOffset = center * pow(dist, 2.0) * u_intensity;
+    // 计算 SDF：在卡片内部时 sdf 为负数
+    float sdf = sdRoundedBox(p, b, r);
+    float distFromEdge = -sdf; // 转为正数：当前像素点距离卡片外边缘的实际像素数
 
-    // 2. 换算像素级偏移量
-    vec2 pixelOffset = lensOffset * u_container_size;
+    vec2 lensOffset = vec2(0.0);
 
-    // 3. 计算并采样背景的全局坐标
-    vec2 globalCoord = u_container_offset + localCoord + pixelOffset;
+    // 【关键控制】：只在 [0, u_edge_margin] 像素范围内产生畸变，再往深处完全不畸变
+    if (distFromEdge >= 0.0 && distFromEdge < u_edge_margin) {
+        // 归一化进度：0.0 (靠近内部无畸变边界) -> 1.0 (最外侧边缘)
+        float t = 1.0 - (distFromEdge / u_edge_margin);
+        
+        // 高阶非线性过渡，让最靠里的地方衔接极度平滑，最外层边缘弯折剧烈
+        float factor = pow(t, 2.5);
+
+        // 获取该点垂直于边缘向外的法线向量
+        vec2 normal = getRoundedBoxNormal(p, b);
+
+        // 沿法线方向做偏移计算
+        lensOffset = normal * factor * u_intensity * 40.0;
+    }
+
+    // 计算全局采样坐标
+    vec2 globalCoord = u_container_offset + localCoord + lensOffset;
     vec2 globalUv = globalCoord / u_bg_size;
     globalUv = clamp(globalUv, vec2(0.001), vec2(0.999));
 

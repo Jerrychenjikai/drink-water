@@ -98,16 +98,13 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(height: 32),
                 
                 // 为了在复杂背景上看清字，给标题加个小白底
-                Container(
-                  color: Colors.white70,
-                  child: const Text(
-                    "drink water",
-                    style: TextStyle(
-                      fontSize: 36,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -1.2,
-                      color: Colors.black87,
-                    ),
+                const Text(
+                  "drink water",
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1.2,
+                    color: Colors.black87,
                   ),
                 ),
                 
@@ -119,22 +116,19 @@ class _HomePageState extends State<HomePage> {
                   borderRadius: 36,
                   refractionShader: _refractionShader,
                   backgroundImage: _backgroundImage,
-                  refractionIntensity: 0.08,
+                  refractionIntensity: 100,
                   bgSize: MediaQuery.of(context).size, // 只需传入全屏背景大小
                   child: Padding(
                     padding: const EdgeInsets.all(24.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          color: Colors.white70,
-                          child: Text(
-                            "This Week",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black,
-                            ),
+                        Text(
+                          "This Week",
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black,
                           ),
                         ),
                         const Spacer(),
