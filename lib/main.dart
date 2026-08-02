@@ -36,33 +36,52 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   ui.FragmentShader? _refractionShader;
   ui.Image? _backgroundImage;
+  
+  // 记录上一次的窗口尺寸，用于对比是否发生了变化
+  Size _lastSize = Size.zero;
 
   @override
   void initState() {
     super.initState();
-    _initShaderAndBackground();
+    _loadShader(); // 仅加载一次 Shader 程序
   }
 
-  Future<void> _initShaderAndBackground() async {
+  @override
+  void dispose() {
+    _backgroundImage?.dispose(); // 页面销毁时释放背景图片资源
+    super.dispose();
+  }
+
+  /// 一次性加载 Shader 程序
+  Future<void> _loadShader() async {
     try {
       final program = await ui.FragmentProgram.fromAsset('shaders/refraction.frag');
       final shader = program.fragmentShader();
 
-      // 这里的尺寸需要足够大，能够覆盖屏幕
-      final screenSize = ui.PlatformDispatcher.instance.views.first.physicalSize /
-          ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
-          
-      // 使用相同的 CheckerboardPainter 生成底层纹理
-      final bgImage = await _createBackgroundTexture(screenSize);
-
       if (mounted) {
         setState(() {
           _refractionShader = shader;
-          _backgroundImage = bgImage;
         });
       }
     } catch (e) {
-      debugPrint('Shader 或背景图加载失败: $e');
+      debugPrint('Shader 加载失败: $e');
+    }
+  }
+
+  /// 根据新尺寸重新生成背景图片纹理
+  Future<void> _updateBackgroundTexture(Size size) async {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final bgImage = await _createBackgroundTexture(size);
+
+    if (mounted) {
+      setState(() {
+        // 释放上一张图片的显存，防止内存泄漏
+        _backgroundImage?.dispose();
+        _backgroundImage = bgImage;
+      });
+    } else {
+      bgImage.dispose();
     }
   }
 
@@ -80,6 +99,19 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // 获取当前窗口/屏幕尺寸
+    final screenSize = MediaQuery.sizeOf(context);
+
+    // 检测窗口尺寸是否发生改变（包括初始化尺寸变化）
+    if (_lastSize != screenSize) {
+      _lastSize = screenSize;
+      
+      // 在当前帧渲染完成后重新生成背景图片，避免在 build 过程中直接 setState
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _updateBackgroundTexture(screenSize);
+      });
+    }
+
     return Scaffold(
       body: Stack(
         children: [
@@ -97,7 +129,6 @@ class _HomePageState extends State<HomePage> {
               children: [
                 const SizedBox(height: 32),
                 
-                // 为了在复杂背景上看清字，给标题加个小白底
                 const Text(
                   "drink water",
                   style: TextStyle(
@@ -110,20 +141,20 @@ class _HomePageState extends State<HomePage> {
                 
                 const SizedBox(height: 32),
                 
-                // 4. 液态玻璃卡片（用于观察边缘畸变）
+                // 液态玻璃卡片
                 LiquidGlassContainer(
                   height: 260,
                   borderRadius: 36,
                   refractionShader: _refractionShader,
                   backgroundImage: _backgroundImage,
-                  refractionIntensity: 100,
-                  bgSize: MediaQuery.of(context).size, // 只需传入全屏背景大小
+                  refractionIntensity: 10,
+                  bgSize: screenSize, // 传入最新的全屏背景大小
                   child: Padding(
                     padding: const EdgeInsets.all(24.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        const Text(
                           "This Week",
                           style: TextStyle(
                             fontSize: 18,
@@ -161,7 +192,7 @@ class _HomePageState extends State<HomePage> {
             width: 24,
             height: 140 * heights[index],
             decoration: BoxDecoration(
-              color: Colors.blueAccent.withOpacity(0.9), // 改为纯色以便在复杂背景下看清
+              color: Colors.blueAccent.withOpacity(0.9),
               borderRadius: BorderRadius.circular(12),
             ),
           );
@@ -182,7 +213,6 @@ class CheckerboardPainter extends CustomPainter {
 
     for (double x = 0; x < size.width; x += gridSize) {
       for (double y = 0; y < size.height; y += gridSize) {
-        // 判断奇偶性交替颜色
         bool isEven = ((x / gridSize).floor() + (y / gridSize).floor()) % 2 == 0;
         
         canvas.drawRect(
