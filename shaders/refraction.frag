@@ -70,7 +70,7 @@ void main() {
     }
 
     // 计算全局采样坐标
-    vec2 globalCoord = u_container_offset + localCoord + lensOffset;
+    vec2 globalCoord = u_container_offset + localCoord - lensOffset;
     vec2 globalUv = globalCoord / u_bg_size;
     
     // 防止采样越界

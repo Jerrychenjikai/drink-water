@@ -79,7 +79,6 @@ class _HomePageState extends State<HomePage> {
                     const LiquidGlassContainer(
                       height: 260,
                       borderRadius: 36,
-                      refractionIntensity: 10,
                       child: Padding(
                         padding: EdgeInsets.all(24.0),
                         child: Column(
@@ -106,7 +105,6 @@ class _HomePageState extends State<HomePage> {
                     const LiquidGlassContainer(
                       height: 100,
                       borderRadius: 24,
-                      refractionIntensity: 15,
                       child: Center(
                         child: Text("Another Liquid Glass Card"),
                       ),

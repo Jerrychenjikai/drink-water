@@ -146,7 +146,7 @@ class LiquidGlassContainer extends StatefulWidget {
     this.borderRadius = 32.0,
     this.edgeMargin = 30.0,
     this.backgroundImage,
-    this.refractionIntensity = 10,
+    this.refractionIntensity = 7,
     this.bgSize,
   });
 
@@ -315,7 +315,7 @@ Future<T?> showLiquidGlassPopup<T>({
   double height = 460,
   double borderRadius = 32.0,
   double edgeMargin = 30.0,
-  double refractionIntensity = 10.0,
+  double refractionIntensity = 7,
   Color barrierColor = Colors.black12, 
 }) async {
   if (_globalRefractionShader == null) {
