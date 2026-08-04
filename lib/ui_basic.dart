@@ -193,11 +193,13 @@ class _LiquidGlassContainerState extends State<LiquidGlassContainer> {
       preloadLiquidGlassShader();
     }
 
-    // 优先取手动传入的背景，无传参则自动从父级 Scope 获取
     final scopeData = LiquidGlassScope.of(context);
     final effectiveImage = widget.backgroundImage ?? scopeData?.backgroundImage;
     final effectiveBgSize = widget.bgSize ?? scopeData?.bgSize ?? MediaQuery.sizeOf(context);
     
+    // 关键：自动搜寻外层最近的 Scrollable 容器并获取其 ScrollPosition (继承自 Listenable)
+    final scrollPosition = Scrollable.maybeOf(context)?.position;
+
     return SizedBox(
       key: _containerKey,
       width: widget.width,
@@ -213,10 +215,11 @@ class _LiquidGlassContainerState extends State<LiquidGlassContainer> {
                     shader: _globalRefractionShader!,
                     image: effectiveImage,
                     intensity: widget.refractionIntensity,
-                    containerKey: _containerKey, // 传入 Key 供 paint 阶段查询坐标
+                    containerKey: _containerKey,
                     bgSize: effectiveBgSize,
                     borderRadius: widget.borderRadius, 
                     edgeMargin: widget.edgeMargin / 1.5,
+                    repaint: scrollPosition, // 绑定滚动信号
                   ),
                 ),
               ),
@@ -245,11 +248,11 @@ class _RefractionPainter extends CustomPainter {
     required this.bgSize,
     required this.borderRadius,
     required this.edgeMargin,
-  });
+    Listenable? repaint, // 1. 新增 repaint 参数，用于接收滚动监听
+  }) : super(repaint: repaint); // 2. 关键：传递给父类 CustomPainter，实现自动局部位移重绘
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 【核心改进】：在绘制阶段直接获取当前帧 RenderBox 在屏幕上的绝对坐标
     Offset currentOffset = Offset.zero;
     final renderBox = containerKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox != null && renderBox.hasSize && renderBox.attached) {
@@ -258,11 +261,8 @@ class _RefractionPainter extends CustomPainter {
 
     shader.setFloat(0, size.width);
     shader.setFloat(1, size.height);
-    
-    // 实时将当前帧坐标传给 GLSL Shader
     shader.setFloat(2, currentOffset.dx);
     shader.setFloat(3, currentOffset.dy);
-
     shader.setFloat(4, bgSize.width);
     shader.setFloat(5, bgSize.height);
     shader.setFloat(6, intensity);
@@ -276,8 +276,12 @@ class _RefractionPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _RefractionPainter oldDelegate) {
-    // 当父级（如 AnimatedBuilder）触发 Rebuild 时，确保重新绘制以刷新当前帧坐标
-    return true; 
+    // 当属性更改时才重新对比，坐标刷新已由 super(repaint) 接管
+    return oldDelegate.image != image ||
+           oldDelegate.intensity != intensity ||
+           oldDelegate.bgSize != bgSize ||
+           oldDelegate.borderRadius != borderRadius ||
+           oldDelegate.edgeMargin != edgeMargin;
   }
 }
 
