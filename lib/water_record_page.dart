@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import 'ui_basic.dart'; 
+import 'ui_asset.dart';
 import 'health_basic.dart';
 
 class WaterRecordPage extends StatefulWidget {
@@ -51,6 +52,7 @@ class _WaterRecordPagState extends State<WaterRecordPage> with SingleTickerProvi
   final WaterTrackingService _waterTracking = WaterTrackingService();
   
   late Future<List<double>> _weeklyWaterFuture;
+  late Future<double> _todayWaterFuture;
 
   late AnimationController _controller;
   late Animation<Offset> _card1SlideAnim;
@@ -71,6 +73,12 @@ class _WaterRecordPagState extends State<WaterRecordPage> with SingleTickerProvi
         return _waterTracking.getPastWeekDailyWaterIntake();
       }
       return List.filled(7, 0.0);
+    });
+    _todayWaterFuture = _waterTracking.requestPermissions().then((granted) {
+      if (granted) {
+        return _waterTracking.getTodayTotalWaterIntake();
+      }
+      return 0.0;
     });
   }
 
@@ -120,6 +128,7 @@ class _WaterRecordPagState extends State<WaterRecordPage> with SingleTickerProvi
   @override
   void dispose() {
     _controller.dispose();
+    widget.snapshotImage.dispose();
     super.dispose();
   }
 
@@ -136,6 +145,7 @@ class _WaterRecordPagState extends State<WaterRecordPage> with SingleTickerProvi
       },
       child: Scaffold(
         backgroundColor: Colors.transparent,
+        resizeToAvoidBottomInset: false,
         body: RepaintBoundary(
           key: _backgroundKey,
           child: Stack(
@@ -234,57 +244,148 @@ class _WaterRecordPagState extends State<WaterRecordPage> with SingleTickerProvi
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 LiquidGlassContainer(
-                                  height: 100,
-                                  borderRadius: 24,
+                                  height: 260,
+                                  borderRadius: 36,
                                   backgroundImage: widget.snapshotImage, 
                                   bgSize: screenSize,
-                                  child: const Center(
-                                    child: Text(
-                                      "Another Liquid Glass Card",
-                                      style: TextStyle(fontWeight: FontWeight.bold),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(24.0),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          "Today",
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.black,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        FutureBuilder<double>(
+                                          future: _todayWaterFuture,
+                                          builder: (context, snapshot) {
+                                            if (snapshot.connectionState == ConnectionState.waiting) {
+                                              return const SizedBox(
+                                                height: 140,
+                                                child: Center(
+                                                  child: CircularProgressIndicator.adaptive(),
+                                                ),
+                                              );
+                                            }
+                                            final data = snapshot.data ?? 0.0;
+                                            return WaterRingProgress(currentWater: data);
+                                          },
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
+
+
                                 const SizedBox(height: 32),
-                                ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                    backgroundColor: Colors.white.withOpacity(0.5),
-                                    elevation: 0,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
+                                liquidButton(
+                                  child: const Text(
+                                    "Record hydration",
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      color: Colors.black87,
+                                      fontWeight: FontWeight.bold,
                                     ),
                                   ),
                                   onPressed: () {
+                                    // 实例化输入框控制器
+                                    final TextEditingController waterController = TextEditingController();
+
                                     showLiquidGlassPopup(
                                       context: context,
                                       backgroundKey: _backgroundKey,
                                       width: 280,
-                                      height: 180,
+                                      height: 220, // 调整高度以适配文本框和提交按钮
                                       borderRadius: 24.0,
-                                      child: const Center(
-                                        child: Text(
-                                          "hello world",
-                                          style: TextStyle(
-                                            fontSize: 24,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black87,
-                                          ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(16.0),
+                                        child: Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            // 毫升数字输入框
+                                            TextField(
+                                              controller: waterController,
+                                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                              style: const TextStyle(color: Colors.black87),
+                                              decoration: InputDecoration(
+                                                labelText: 'Volume (ml)',
+                                                hintText: 'e.g. 250',
+                                                filled: true,
+                                                fillColor: Colors.white.withOpacity(0.3),
+                                                border: OutlineInputBorder(
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  borderSide: BorderSide.none,
+                                                ),
+                                                contentPadding: const EdgeInsets.symmetric(
+                                                  horizontal: 16,
+                                                  vertical: 12,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 16),
+                                            // 弹窗内的 Liquid Button 记录按钮
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: liquidButton(
+                                                child: const Text(
+                                                  "Record hydration",
+                                                  style: TextStyle(
+                                                    fontSize: 16,
+                                                    color: Colors.black87,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                                onPressed: () async {
+                                                  final text = waterController.text.trim();
+                                                  final double? milliliters = double.tryParse(text);
+
+                                                  if (milliliters != null && milliliters > 0) {
+                                                    // 调用 WaterTrackingService 的 recordWaterIntake 写入数据
+                                                    bool success = await _waterTracking.recordWaterIntake(
+                                                      milliliters: milliliters,
+                                                    );
+
+                                                    if (context.mounted) {
+                                                      Navigator.of(context).pop(); // 关闭弹窗
+                                                      
+                                                      // 提示结果
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        SnackBar(
+                                                          content: Text(
+                                                            success
+                                                                ? 'Sucecessfully recorded ${milliliters.toInt()} ml！'
+                                                                : 'Recording failed',
+                                                          ),
+                                                        ),
+                                                      );
+                                                    }
+                                                  } else {
+                                                    if (context.mounted) {
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        const SnackBar(content: Text('Incorrect number')),
+                                                      );
+                                                    }
+                                                  }
+                                                },
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
                                     );
                                   },
-                                  child: const Text(
-                                    "Show Liquid Popup",
-                                    style: TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.bold),
-                                  ),
                                 ),
                               ],
                             ),
                           ),
                         ),
-                        
-                        const SizedBox(height: 400), 
                       ],
                     );
                   },
@@ -293,56 +394,6 @@ class _WaterRecordPagState extends State<WaterRecordPage> with SingleTickerProvi
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class WaterBarChart extends StatelessWidget {
-  final List<double> waterData;
-  final double targetWater;
-
-  const WaterBarChart({
-    super.key,
-    required this.waterData,
-    this.targetWater = 2000.0,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final displayData = waterData.length == 7 ? waterData : List.filled(7, 0.0);
-
-    final double maxVal = max(
-      targetWater,
-      displayData.reduce((curr, next) => curr > next ? curr : next),
-    );
-
-    const double chartHeight = 140.0;
-
-    return SizedBox(
-      height: chartHeight,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(7, (index) {
-          final double amount = displayData[index];
-          final double ratio = maxVal > 0 ? (amount / maxVal).clamp(0.0, 1.0) : 0.0;
-          final double barHeight = max(chartHeight * ratio, 4.0);
-
-          return Tooltip(
-            message: '${amount.toStringAsFixed(0)} ml',
-            child: Container(
-              width: 24,
-              height: barHeight,
-              decoration: BoxDecoration(
-                color: amount >= targetWater
-                    ? Colors.blueAccent
-                    : Colors.blueAccent.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          );
-        }),
       ),
     );
   }

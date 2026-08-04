@@ -1,4 +1,5 @@
 import 'dart:ui' as ui;
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -307,7 +308,12 @@ Future<T?> showLiquidGlassPopup<T>({
     await preloadLiquidGlassShader(assetPath: shaderAssetPath);
   }
 
-  final snapshotImage = await captureBackground(context, backgroundKey);
+  final origImage = await captureBackground(context, backgroundKey);
+  final snapshotImage = origImage == null ? null : await processSnapshotImage(
+      origImage,
+      blurSigma: 16.0,      // 模糊程度
+      darkenOpacity: 0.05,  // 变暗程度
+    );
   final screenSize = MediaQuery.sizeOf(context);
 
   if (!context.mounted) return null;
@@ -321,18 +327,22 @@ Future<T?> showLiquidGlassPopup<T>({
     return showModalBottomSheet<T>(
       context: context,
       barrierColor: barrierColor,
-      backgroundColor: Colors.transparent, // 必须透明以展示玻璃折射效果
-      isScrollControlled: true, // 允许弹窗高度超过屏幕一半，以适应传入的 height
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true, 
       builder: (context) {
-        return LiquidGlassContainer(
-          width: double.infinity, // 宽度占满全屏
-          height: height,
-          borderRadius: borderRadius,
-          edgeMargin: edgeMargin,
-          backgroundImage: snapshotImage,            
-          refractionIntensity: refractionIntensity,
-          bgSize: screenSize,
-          child: child,
+        return Padding( // 👈 新增 Padding 包裹层
+          // 👈 动态获取键盘高度，并在底部撑开对应空间的 Padding
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom), 
+          child: LiquidGlassContainer(
+            width: double.infinity,
+            height: height,
+            borderRadius: borderRadius,
+            edgeMargin: edgeMargin,
+            backgroundImage: snapshotImage,            
+            refractionIntensity: refractionIntensity,
+            bgSize: screenSize,
+            child: child,
+          ),
         );
       },
     );

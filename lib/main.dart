@@ -50,6 +50,7 @@ class _HomePageState extends State<HomePage> {
     return LiquidGlassScope(
       painter: GradientBackgroundPainter(),
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         body: RepaintBoundary(
           key: _homepageKey,
           child: Stack(
