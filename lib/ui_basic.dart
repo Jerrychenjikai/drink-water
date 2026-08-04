@@ -316,7 +316,10 @@ Future<T?> showLiquidGlassPopup<T>({
   double borderRadius = 32.0,
   double edgeMargin = 30.0,
   double refractionIntensity = 7,
-  Color barrierColor = Colors.black12, 
+  Color barrierColor = Colors.black12,
+
+  double mobileWidthThreshold = 600.0, 
+  double mobileHeightThreshold = 1000.0,
 }) async {
   if (_globalRefractionShader == null) {
     await preloadLiquidGlassShader(assetPath: shaderAssetPath);
@@ -327,13 +330,20 @@ Future<T?> showLiquidGlassPopup<T>({
 
   if (!context.mounted) return null;
 
-  return showDialog<T>(
-    context: context,
-    barrierColor: barrierColor,
-    builder: (context) {
-      return Center(
-        child: LiquidGlassContainer(
-          width: width,
+  // 判断屏幕宽度和高度是否均小于一定值（判定为 iPhone/手机端）
+  final isMobile = screenSize.width < mobileWidthThreshold && 
+                   screenSize.height < mobileHeightThreshold;
+
+  if (isMobile) {
+    // 手机端：从屏幕底部冒出，宽度占据整个屏幕
+    return showModalBottomSheet<T>(
+      context: context,
+      barrierColor: barrierColor,
+      backgroundColor: Colors.transparent, // 必须透明以展示玻璃折射效果
+      isScrollControlled: true, // 允许弹窗高度超过屏幕一半，以适应传入的 height
+      builder: (context) {
+        return LiquidGlassContainer(
+          width: double.infinity, // 宽度占满全屏
           height: height,
           borderRadius: borderRadius,
           edgeMargin: edgeMargin,
@@ -341,10 +351,30 @@ Future<T?> showLiquidGlassPopup<T>({
           refractionIntensity: refractionIntensity,
           bgSize: screenSize,
           child: child,
-        ),
-      );
-    },
-  );
+        );
+      },
+    );
+  } else {
+    // 否则（桌面端/平板端）：保持不变，居中显示
+    return showDialog<T>(
+      context: context,
+      barrierColor: barrierColor,
+      builder: (context) {
+        return Center(
+          child: LiquidGlassContainer(
+            width: width,
+            height: height,
+            borderRadius: borderRadius,
+            edgeMargin: edgeMargin,
+            backgroundImage: snapshotImage,            
+            refractionIntensity: refractionIntensity,
+            bgSize: screenSize,
+            child: child,
+          ),
+        );
+      },
+    );
+  }
 }
 
 Future<ui.Image?> captureBackground(BuildContext context, GlobalKey backgroundKey) async {
