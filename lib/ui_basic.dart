@@ -1,5 +1,3 @@
-// ui_basic.dart
-
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -17,6 +15,37 @@ Future<void> preloadLiquidGlassShader({String assetPath = 'shaders/refraction.fr
   } catch (e) {
     debugPrint('Liquid Glass Shader 加载失败: $e');
   }
+}
+
+Future<ui.Image> processSnapshotImage(
+  ui.Image inputImage, {
+  double blurSigma = 4.0,
+  double darkenOpacity = 0.25,
+}) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(
+    recorder,
+    Rect.fromLTWH(0, 0, inputImage.width.toDouble(), inputImage.height.toDouble()),
+  );
+
+  // 配置画笔：高斯模糊 + 黑色混合模式（降亮度）
+  final paint = Paint()
+    ..imageFilter = ui.ImageFilter.blur(
+      sigmaX: blurSigma,
+      sigmaY: blurSigma,
+      tileMode: TileMode.clamp, // 避免边缘模糊白边
+    )
+    ..colorFilter = ColorFilter.mode(
+      Colors.black.withOpacity(darkenOpacity),
+      BlendMode.lighten,
+    );
+
+  // 将原图绘制进 Recorder
+  canvas.drawImage(inputImage, Offset.zero, paint);
+
+  // 导出处理后的图像（极快，耗时通常 < 3毫秒）
+  final picture = recorder.endRecording();
+  return await picture.toImage(inputImage.width, inputImage.height);
 }
 
 // ==========================================
@@ -125,7 +154,7 @@ class _LiquidGlassInherited extends InheritedWidget {
 }
 
 // ==========================================
-// 液态玻璃容器组件 (支持自动从 Scope 提取数据)
+// 液态玻璃容器组件 (支持实时坐标捕捉与 Shader 渲染)
 // ==========================================
 class LiquidGlassContainer extends StatefulWidget {
   final Widget child;
@@ -155,69 +184,16 @@ class LiquidGlassContainer extends StatefulWidget {
 }
 
 class _LiquidGlassContainerState extends State<LiquidGlassContainer> {
+  // 保持 GlobalKey 在 State 中持久化，避免动画重建时重新创建 Key
   final GlobalKey _containerKey = GlobalKey();
-  final ValueNotifier<Offset> _offsetNotifier = ValueNotifier(Offset.zero);
-  ScrollPosition? _scrollPosition;
-  Animation<double>? _routeAnimation; 
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _attachScrollListener();
-    _attachRouteAnimationListener(); 
-  }
-
-  void _attachRouteAnimationListener() {
-    final route = ModalRoute.of(context);
-    if (route != null && route.animation != null) {
-      final animation = route.animation;
-      if (_routeAnimation != animation) {
-        _routeAnimation?.removeListener(_updatePosition);
-        _routeAnimation = animation;
-        _routeAnimation?.addListener(_updatePosition); 
-      }
-    }
-  }
-
-  void _attachScrollListener() {
-    final scrollable = Scrollable.maybeOf(context);
-    if (scrollable != null) {
-      final position = scrollable.position;
-      if (_scrollPosition != position) {
-        _scrollPosition?.removeListener(_updatePosition);
-        _scrollPosition = position;
-        _scrollPosition?.addListener(_updatePosition);
-      }
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _updatePosition());
-  }
-
-  void _updatePosition() {
-    if (!mounted) return;
-    final renderBox = _containerKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null && renderBox.hasSize) {
-      final newOffset = renderBox.localToGlobal(Offset.zero);
-      if (newOffset != _offsetNotifier.value) {
-        _offsetNotifier.value = newOffset;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _scrollPosition?.removeListener(_updatePosition);
-    _routeAnimation?.removeListener(_updatePosition); 
-    _offsetNotifier.dispose(); 
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    if(_globalRefractionShader == null){
+    if (_globalRefractionShader == null) {
       preloadLiquidGlassShader();
     }
 
-    // 【关键】：优先取手动传入的，无传参则自动从父级 Scope 获取
+    // 优先取手动传入的背景，无传参则自动从父级 Scope 获取
     final scopeData = LiquidGlassScope.of(context);
     final effectiveImage = widget.backgroundImage ?? scopeData?.backgroundImage;
     final effectiveBgSize = widget.bgSize ?? scopeData?.bgSize ?? MediaQuery.sizeOf(context);
@@ -237,10 +213,10 @@ class _LiquidGlassContainerState extends State<LiquidGlassContainer> {
                     shader: _globalRefractionShader!,
                     image: effectiveImage,
                     intensity: widget.refractionIntensity,
-                    offsetNotifier: _offsetNotifier, 
+                    containerKey: _containerKey, // 传入 Key 供 paint 阶段查询坐标
                     bgSize: effectiveBgSize,
                     borderRadius: widget.borderRadius, 
-                    edgeMargin: widget.edgeMargin/1.5,
+                    edgeMargin: widget.edgeMargin / 1.5,
                   ),
                 ),
               ),
@@ -256,7 +232,7 @@ class _RefractionPainter extends CustomPainter {
   final ui.FragmentShader shader;
   final ui.Image image;
   final double intensity;
-  final ValueNotifier<Offset> offsetNotifier;
+  final GlobalKey containerKey;
   final Size bgSize;
   final double borderRadius;
   final double edgeMargin;   
@@ -265,18 +241,25 @@ class _RefractionPainter extends CustomPainter {
     required this.shader,
     required this.image,
     required this.intensity,
-    required this.offsetNotifier,
+    required this.containerKey,
     required this.bgSize,
     required this.borderRadius,
     required this.edgeMargin,
-  }) : super(repaint: offsetNotifier);
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 【核心改进】：在绘制阶段直接获取当前帧 RenderBox 在屏幕上的绝对坐标
+    Offset currentOffset = Offset.zero;
+    final renderBox = containerKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize && renderBox.attached) {
+      currentOffset = renderBox.localToGlobal(Offset.zero);
+    }
+
     shader.setFloat(0, size.width);
     shader.setFloat(1, size.height);
     
-    final currentOffset = offsetNotifier.value; 
+    // 实时将当前帧坐标传给 GLSL Shader
     shader.setFloat(2, currentOffset.dx);
     shader.setFloat(3, currentOffset.dy);
 
@@ -293,13 +276,8 @@ class _RefractionPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _RefractionPainter oldDelegate) {
-    return oldDelegate.shader != shader ||
-        oldDelegate.image != image ||
-        oldDelegate.intensity != intensity ||
-        oldDelegate.bgSize != bgSize ||
-        oldDelegate.borderRadius != borderRadius ||
-        oldDelegate.edgeMargin != edgeMargin ||
-        oldDelegate.offsetNotifier != offsetNotifier;
+    // 当父级（如 AnimatedBuilder）触发 Rebuild 时，确保重新绘制以刷新当前帧坐标
+    return true; 
   }
 }
 
