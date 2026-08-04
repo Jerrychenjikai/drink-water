@@ -26,6 +26,14 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothWhileInUseUsageDescription</key>
+	<string>We need bluetooth to communicate with the smart cup holder</string>
+	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
+	<string>We need access to your hydration data</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>We need access to your hydration data</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>We need to record your hydration data to Apple HealthKit</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

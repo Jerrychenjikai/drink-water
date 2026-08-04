@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:math';
 
 import 'ui_basic.dart'; 
+import 'health_basic.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,14 +35,36 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  bool background = false;
   final GlobalKey _backgroundKey = GlobalKey();
+  final WaterTrackingService _waterTracking = WaterTrackingService();
+  
+  // 保存异步 Fetch 任务，避免每次 build 重复拉取健康数据
+  late Future<List<double>> _weeklyWaterFuture;
+
+  @override
+  void initState() {
+    super.initState(); // ✅ 修正：必须调用 super.initState()
+    _initHealthData();
+  }
+
+  void _initHealthData() async {
+    // 异步申请权限，然后获取周数据
+    bool granted = await _waterTracking.requestPermissions();
+    if (granted) {
+      setState(() {
+        _weeklyWaterFuture = _waterTracking.getPastWeekDailyWaterIntake();
+      });
+    } else {
+      setState(() {
+        _weeklyWaterFuture = Future.value(List.filled(7, 0.0));
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final activePainter = background ? CheckerboardPainter() : GradientBackgroundPainter();
+    final activePainter = GradientBackgroundPainter();
 
-    // 【1】用 LiquidGlassScope 包裹整个页面
     return LiquidGlassScope(
       painter: activePainter,
       child: Scaffold(
@@ -75,16 +98,16 @@ class _HomePageState extends State<HomePage> {
                     
                     const SizedBox(height: 32),
                     
-                    // 【2】第一个玻璃卡片：不需要传 backgroundImage 和 bgSize 了！
-                    const LiquidGlassContainer(
+                    // 【玻璃卡片 + 异步图表】
+                    LiquidGlassContainer(
                       height: 260,
                       borderRadius: 36,
                       child: Padding(
-                        padding: EdgeInsets.all(24.0),
+                        padding: const EdgeInsets.all(24.0),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            const Text(
                               "This Week",
                               style: TextStyle(
                                 fontSize: 18,
@@ -92,8 +115,23 @@ class _HomePageState extends State<HomePage> {
                                 color: Colors.black,
                               ),
                             ),
-                            Spacer(),
-                            _BarChart(),
+                            const Spacer(),
+                            // ✅ 修正：使用 FutureBuilder 优雅加载异步数据
+                            FutureBuilder<List<double>>(
+                              future: _weeklyWaterFuture,
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState == ConnectionState.waiting) {
+                                  return const SizedBox(
+                                    height: 140,
+                                    child: Center(
+                                      child: CircularProgressIndicator.adaptive(),
+                                    ),
+                                  );
+                                }
+                                final data = snapshot.data ?? List.filled(7, 0.0);
+                                return WaterBarChart(waterData: data);
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -101,7 +139,6 @@ class _HomePageState extends State<HomePage> {
 
                     const SizedBox(height: 20),
 
-                    // 【3】甚至可以随意放第二个玻璃卡片，共享同一显存纹理，性能无耗损！
                     const LiquidGlassContainer(
                       height: 100,
                       borderRadius: 24,
@@ -118,8 +155,8 @@ class _HomePageState extends State<HomePage> {
                         backgroundColor: Colors.white.withOpacity(0.5),
                         elevation: 0,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)
-                        )
+                          borderRadius: BorderRadius.circular(16),
+                        ),
                       ),
                       onPressed: () {
                         showLiquidGlassPopup(
@@ -153,38 +190,63 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
         ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () {
-            setState(() {
-              background = !background;
-            });
-          },
-        ),
       ),
     );
   }
 }
 
-class _BarChart extends StatelessWidget {
-  const _BarChart();
+class WaterBarChart extends StatelessWidget {
+  /// 接收过去 7 天的饮水量列表（单位：ml）
+  final List<double> waterData;
+
+  /// 目标饮水量（用于计算柱状图满格比例，默认 2000 ml）
+  final double targetWater;
+
+  const WaterBarChart({
+    super.key,
+    required this.waterData,
+    this.targetWater = 2000.0,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final random = Random(42);
-    final heights = List.generate(7, (index) => 0.2 + random.nextDouble() * 0.8);
+    // 确保数据长度不为 0，若为空则显示默认 7 个 0
+    final displayData = waterData.length == 7 ? waterData : List.filled(7, 0.0);
+
+    // 动态算出 7 天中的最大值，确保图表的比例上限至少等于 targetWater
+    final double maxVal = max(
+      targetWater,
+      displayData.reduce((curr, next) => curr > next ? curr : next),
+    );
+
+    const double chartHeight = 140.0;
 
     return SizedBox(
-      height: 140,
+      height: chartHeight,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: List.generate(7, (index) {
-          return Container(
-            width: 24,
-            height: 140 * heights[index],
-            decoration: BoxDecoration(
-              color: Colors.blueAccent.withOpacity(0.9),
-              borderRadius: BorderRadius.circular(12),
+          final double amount = displayData[index];
+
+          // 计算比例（0.0 ~ 1.0）
+          final double ratio = maxVal > 0 ? (amount / maxVal).clamp(0.0, 1.0) : 0.0;
+
+          // 计算对应像素高度（最少保留 4px 避免完全看不到）
+          final double barHeight = max(chartHeight * ratio, 4.0);
+
+          return Tooltip(
+            message: '${amount.toStringAsFixed(0)} ml', // 长按显示具体数值
+            child: Container(
+              width: 24,
+              height: barHeight,
+              decoration: BoxDecoration(
+                // 达到了目标水量显示深蓝，未达到显示浅蓝
+                color: amount >= targetWater
+                    ? Colors.blueAccent
+                    : Colors.blueAccent.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           );
         }),
@@ -202,31 +264,17 @@ class GradientBackgroundPainter extends CustomPainter {
       ..shader = const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Color(0xFF8EC5FC), Color(0xFFE2F0CB)],
+        colors: [
+          Color.fromARGB(255, 1, 145, 255), // 深邃暗夜蓝 (奠定强对比基调)
+          Color(0xFF00C9FF), 
+          Color(0xFF00F2FE), // 极光电光青 (瞬间拉高明度)
+          Color.fromARGB(255, 141, 252, 153), // 荧光薄荷绿 (剧烈拉开色相)
+          Color.fromARGB(255, 0, 255, 115), // 浓郁翡翠绿 (加深色彩饱满度)
+        ],
+        // 通过密集配置 stops，让颜色在局部像素范围内剧烈跃迁
+        stops: [0.0, 0.25, 0.45, 0.75, 1.0],
       ).createShader(rect);
     canvas.drawRect(rect, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class CheckerboardPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint1 = Paint()..color = const Color(0xFF8EC5FC);
-    final paint2 = Paint()..color = const Color(0xFFE2F0CB);
-    const double gridSize = 40.0;
-
-    for (double x = 0; x < size.width; x += gridSize) {
-      for (double y = 0; y < size.height; y += gridSize) {
-        bool isEven = ((x / gridSize).floor() + (y / gridSize).floor()) % 2 == 0;
-        canvas.drawRect(
-          Rect.fromLTWH(x, y, gridSize, gridSize),
-          isEven ? paint1 : paint2,
-        );
-      }
-    }
   }
 
   @override
