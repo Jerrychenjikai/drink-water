@@ -218,7 +218,7 @@ class _WaterRecordPageState extends State<WaterRecordPage> {
                           ),
                         ),
                       );
-                      _initHealthData();
+                      setState((){_initHealthData();});
                     }
                   } else {
                     if (context.mounted) {
