@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSBluetoothWhileInUseUsageDescription</key>
 	<string>We need bluetooth to communicate with the smart cup holder</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>We need bluetooth to communicate with the smart cup holder</string>
 	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
 	<string>We need access to your hydration data</string>
 	<key>NSHealthShareUsageDescription</key>

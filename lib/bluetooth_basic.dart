@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // 引入蓝牙库
-import 'package:permission_handler/permission_handler.dart';
 
 /// 统一的串行设备模型
 class MySerialDevice {
@@ -24,43 +22,6 @@ class MySerialDevice {
   @override
   int get hashCode => devicePath.hashCode;
 }
-
-/// 扫描可用的底层 USB 和 BLE 设备
-Future<List<MySerialDevice>> lowLevelScanDevices() async {
-  List<MySerialDevice> availableDevices = [];
-
-  // 扫描 BLE 设备
-  try {
-    // Android 端动态申请蓝牙和定位权限
-    if (Platform.isAndroid) {
-      await [
-        Permission.location,
-        Permission.bluetoothScan,
-        Permission.bluetoothConnect,
-      ].request();
-    }
-    // 开始扫描，持续 3 秒
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 3));
-    // 等待扫描结束
-    await FlutterBluePlus.isScanning.where((val) => val == false).first;
-    
-    for (ScanResult r in FlutterBluePlus.lastScanResults) {
-      if (r.device.platformName.isNotEmpty) {
-        availableDevices.add(
-          MySerialDevice(
-            name: r.device.platformName, 
-            devicePath: r.device.remoteId.str, // MAC Address
-          ),
-        );
-      }
-    }
-  } catch (e) {
-    print("Android 扫描 BLE 设备失败: $e");
-  }
-
-  return availableDevices;
-}
-
 
 
 abstract class IHardwareChannel {

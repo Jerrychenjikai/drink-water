@@ -4,6 +4,8 @@ import 'dart:math';
 import 'ui_basic.dart'; 
 import 'health_basic.dart';
 import 'water_record_page.dart';
+import 'bluetooth_search_page.dart';
+import 'ui_asset.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,8 +67,8 @@ class _HomePageState extends State<HomePage> {
               // 2. 顶层内容
               SafeArea(
                 child: Center(
-                  child: 
-                    Column(children: [
+                  child: Column(
+                    children: [
                       const Text('something'),
                       const Text('something'),
                       const Text('something'),
@@ -78,12 +80,19 @@ class _HomePageState extends State<HomePage> {
                       const Text('something'),
                       const Text('something'),
                       const Text('something'),
-                      ElevatedButton(
+                      liquidButton(
                         onPressed: () {
                           // 一行代码轻松跳转并带截图动画
                           WaterRecordPage.push(context, _homepageKey);
                         },
                         child: const Text("跳转到喝水记录页"),
+                      ),
+                      liquidButton(
+                        onPressed: () {
+                          // 一行代码轻松跳转并带截图动画
+                          BluetoothSearchPage.push(context, _homepageKey);
+                        },
+                        child: const Text("跳转到蓝牙配对页"),
                       ),
                       const Text('something'),
                       const Text('something'),
