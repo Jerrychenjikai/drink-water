@@ -56,7 +56,7 @@ std::string getSimulatedTime() {
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial) { delay(10); }
+  //while (!Serial) { delay(10); }
 
   BLEDevice::init(BLE_DEVICE_NAME);
   
