@@ -1,12 +1,12 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// 根据你的实际文件结构调整引用
 import 'ui_asset.dart';
 import 'ui_basic.dart'; 
-import 'bluetooth_basic.dart'; // 包含 BleHardwareChannel 定义
+import 'bluetooth_basic.dart'; 
 import 'bluetooth_search_page.dart';
 import 'water_record_page.dart';
 
@@ -44,29 +44,33 @@ class _HomePageState extends State<HomePage> {
   final GlobalKey _homepageKey = GlobalKey();
   
   BleHardwareChannel? _bleChannel;
+  StreamSubscription? _bleSubscription; // 1. 保存流订阅，防止重复监听
+  
   bool _isConnected = false;
   bool _isConnecting = false;
 
   @override
   void initState() {
     super.initState();
+    // 2. 将自动连接移至 initState 阶段，只在页面初始化时触发一次
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tryConnect();
+    });
   }
 
   @override
   void dispose() {
-    _bleChannel?.closeAndDispose(); // 页面销毁时断开蓝牙释放资源
+    _bleSubscription?.cancel(); // 清理流监听
+    _bleChannel?.closeAndDispose(); 
     super.dispose();
   }
 
   /// 尝试从 SharedPreferences 读取 MAC 地址并建立蓝牙连接
   Future<void> _tryConnect() async {
-    // 防抖与防重入校验
     if (_isConnecting || _isConnected) return;
     
     if (mounted) {
-      setState(() {
-        _isConnecting = true;
-      });
+      setState(() => _isConnecting = true);
     }
 
     try {
@@ -74,25 +78,28 @@ class _HomePageState extends State<HomePage> {
       final mac = prefs.getString('saved_ble_mac');
       
       if (mac != null && mac.isNotEmpty) {
-        // 创建硬件通道实例
+        // 断开并释放上一次连接与监听
+        await _bleSubscription?.cancel();
         _bleChannel?.closeAndDispose(); 
-        _bleChannel = BleHardwareChannel();
         
+        _bleChannel = BleHardwareChannel();
         bool success = await _bleChannel!.open(mac);
         
         if (success && mounted) {
-          setState(() {
-            _isConnected = true;
-          });
+          setState(() => _isConnected = true);
           
-          // 监听蓝牙发来的消息
-          _bleChannel!.listenStream.listen((data) {
-            _handleBleMessage(data);
-          }, onDone: () {
-            if (mounted) setState(() => _isConnected = false);
-          }, onError: (e) {
-            if (mounted) setState(() => _isConnected = false);
-          });
+          // 监听蓝牙数据流
+          _bleSubscription = _bleChannel!.listenStream.listen(
+            (data) {
+              _handleBleMessage(data);
+            },
+            onDone: () {
+              if (mounted) setState(() => _isConnected = false);
+            },
+            onError: (e) {
+              if (mounted) setState(() => _isConnected = false);
+            },
+          );
         } else {
           if (mounted) setState(() => _isConnected = false);
         }
@@ -102,9 +109,7 @@ class _HomePageState extends State<HomePage> {
       if (mounted) setState(() => _isConnected = false);
     } finally {
       if (mounted) {
-        setState(() {
-          _isConnecting = false;
-        });
+        setState(() => _isConnecting = false);
       }
     }
   }
@@ -112,15 +117,10 @@ class _HomePageState extends State<HomePage> {
   /// 处理收到的蓝牙消息
   void _handleBleMessage(Uint8List data) {
     try {
-      // 将接收到的 Uint8List 转换为 UTF-8 字符串，并解析为 Map
       final String jsonStr = utf8.decode(data);
       final Map<String, dynamic> message = jsonDecode(jsonStr);
       
-      // 处理消息的回调先空着...
-
-      // 每次收到消息都弹一个持续0.4s的 ScaffoldMessenger
       if (mounted) {
-        // 清除旧的 SnackBar 避免堆叠排队延迟
         ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -137,11 +137,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // 每次 rebuild 的时候，如果未连接且没有在连接中，则读取 mac 并尝试连接
-    // 使用 Future.microtask 避免在 build 阶段直接触发 setState 导致报错
-    if (!_isConnected && !_isConnecting) {
-      Future.microtask(() => _tryConnect());
-    }
+    // 移除原先在 build 方法里的 Future.microtask 自动连接逻辑
 
     return LiquidGlassScope(
       painter: GradientBackgroundPainter(),
@@ -162,6 +158,7 @@ class _HomePageState extends State<HomePage> {
               SafeArea(
                 child: Center(
                   child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24.0),
@@ -174,7 +171,6 @@ class _HomePageState extends State<HomePage> {
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                // 蓝牙状态图标
                                 Icon(
                                   _isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
                                   size: 72,
@@ -182,7 +178,6 @@ class _HomePageState extends State<HomePage> {
                                 ),
                                 const SizedBox(height: 24),
                                 
-                                // 蓝牙状态文本
                                 Text(
                                   _isConnecting 
                                       ? "正在连接设备..." 
@@ -195,12 +190,9 @@ class _HomePageState extends State<HomePage> {
                                 ),
                                 const SizedBox(height: 48),
                                 
-                                // 未连接时，给出手动连接按钮
                                 if (!_isConnected)
                                   liquidButton(
-                                    onPressed: () async {
-                                      _tryConnect();
-                                    },
+                                    onPressed: _tryConnect,
                                     child: Text(
                                       _isConnecting ? "连接中..." : "再次尝试连接",
                                       style: const TextStyle(
@@ -215,23 +207,33 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                       ),
-                      Row(
-                        children: [
-                          liquidButton(
-                            onPressed: () {
-                              // 一行代码轻松跳转并带截图动画
-                              WaterRecordPage.push(context, _homepageKey);
-                            },
-                            child: const Text("跳转到喝水记录页"),
-                          ),
-                          liquidButton(
-                            onPressed: () {
-                              // 一行代码轻松跳转并带截图动画
-                              BluetoothSearchPage.push(context, _homepageKey);
-                            },
-                            child: const Text("跳转到蓝牙配对页"),
-                          ),
-                        ],
+                      const SizedBox(height: 20),
+                      // 3. 使用 Expanded 防止横向按钮排版溢出
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: liquidButton(
+                                onPressed: () {
+                                  WaterRecordPage.push(context, _homepageKey);
+                                },
+                                child: const Text("喝水记录页", textAlign: TextAlign.center),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: liquidButton(
+                                onPressed: () async {
+                                  // 从搜索配对页返回后，自动尝试连接新选中的设备
+                                  await BluetoothSearchPage.push(context, _homepageKey);
+                                  _tryConnect();
+                                },
+                                child: const Text("蓝牙配对页", textAlign: TextAlign.center),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -245,7 +247,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// 保留原有的背景绘制器
 class GradientBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
