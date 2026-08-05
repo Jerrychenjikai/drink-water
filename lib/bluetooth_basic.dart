@@ -1,6 +1,16 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // 引入蓝牙库
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:io';
+
+ // 使用完全自定义的 UUID 替换原 Nordic UART UUID
+  const String serviceUuid = "11111111-2222-3333-4444-555555555555";
+  // 注意：App 的接收 (Notify) 对应的是 ESP32 的发送 (TX)
+  const String rxUuid      = "11111111-2222-3333-4444-555555555557"; 
+  // App 的发送 (Write) 对应的是 ESP32 的接收 (RX)
+  const String txUuid      = "11111111-2222-3333-4444-555555555556"; 
+
 
 /// 统一的串行设备模型
 class MySerialDevice {
@@ -23,6 +33,46 @@ class MySerialDevice {
   int get hashCode => devicePath.hashCode;
 }
 
+/// 改写后的扫描函数：支持传入具体的 Service UUID 过滤设备
+Future<List<MySerialDevice>> scanDevicesWithService({String targetServiceUuid = serviceUuid}) async {
+  List<MySerialDevice> availableDevices = [];
+
+  try {
+    // Android 端动态申请蓝牙和定位权限
+    if (Platform.isAndroid) {
+      await [
+        Permission.location,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+    }
+    
+    // 开始扫描，利用 withServices 根据 Service ID 过滤，持续 3 秒
+    await FlutterBluePlus.startScan(
+      withServices: [Guid(targetServiceUuid)],
+      timeout: const Duration(seconds: 3)
+    );
+    
+    // 等待扫描结束
+    await FlutterBluePlus.isScanning.where((val) => val == false).first;
+    
+    for (ScanResult r in FlutterBluePlus.lastScanResults) {
+      if (r.device.platformName.isNotEmpty) {
+        availableDevices.add(
+          MySerialDevice(
+            name: r.device.platformName, 
+            devicePath: r.device.remoteId.str, // MAC Address
+          ),
+        );
+      }
+    }
+  } catch (e) {
+    print("扫描特定 Service BLE 设备失败: $e");
+  }
+
+  return availableDevices;
+}
+
 
 abstract class IHardwareChannel {
   Future<bool> open(String path);
@@ -38,14 +88,6 @@ class BleHardwareChannel implements IHardwareChannel {
   BluetoothCharacteristic? _rxChar; // 接收特征 (App 接收 <- ESP32 发送)
   StreamController<Uint8List>? _streamController;
   StreamSubscription? _subscription;
-
-  // 使用完全自定义的 UUID 替换原 Nordic UART UUID
-  final String serviceUuid = "11111111-2222-3333-4444-555555555555";
-  
-  // 注意：App 的接收 (Notify) 对应的是 ESP32 的发送 (TX)
-  final String rxUuid      = "11111111-2222-3333-4444-555555555557"; 
-  // App 的发送 (Write) 对应的是 ESP32 的接收 (RX)
-  final String txUuid      = "11111111-2222-3333-4444-555555555556"; 
 
   @override
   Future<bool> open(String path) async {

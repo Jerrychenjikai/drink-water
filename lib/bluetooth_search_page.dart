@@ -1,8 +1,5 @@
 import 'dart:ui' as ui;
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // 引入你的基础 UI、模板及设备模型类文件
@@ -10,46 +7,6 @@ import 'ui_basic.dart';
 import 'ui_asset.dart';
 import 'secondary_page_template.dart'; 
 import 'bluetooth_basic.dart'; // 包含 MySerialDevice
-
-/// 改写后的扫描函数：支持传入具体的 Service UUID 过滤设备
-Future<List<MySerialDevice>> scanDevicesWithService(String targetServiceUuid) async {
-  List<MySerialDevice> availableDevices = [];
-
-  try {
-    // Android 端动态申请蓝牙和定位权限
-    if (Platform.isAndroid) {
-      await [
-        Permission.location,
-        Permission.bluetoothScan,
-        Permission.bluetoothConnect,
-      ].request();
-    }
-    
-    // 开始扫描，利用 withServices 根据 Service ID 过滤，持续 3 秒
-    await FlutterBluePlus.startScan(
-      withServices: [Guid(targetServiceUuid)],
-      timeout: const Duration(seconds: 3)
-    );
-    
-    // 等待扫描结束
-    await FlutterBluePlus.isScanning.where((val) => val == false).first;
-    
-    for (ScanResult r in FlutterBluePlus.lastScanResults) {
-      if (r.device.platformName.isNotEmpty) {
-        availableDevices.add(
-          MySerialDevice(
-            name: r.device.platformName, 
-            devicePath: r.device.remoteId.str, // MAC Address
-          ),
-        );
-      }
-    }
-  } catch (e) {
-    print("扫描特定 Service BLE 设备失败: $e");
-  }
-
-  return availableDevices;
-}
 
 class BluetoothSearchPage extends StatefulWidget {
   final ui.Image snapshotImage;
@@ -72,9 +29,6 @@ class BluetoothSearchPage extends StatefulWidget {
 class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
   final GlobalKey _backgroundKey = GlobalKey();
   
-  // 替换成你实际的设备 Service ID
-  final String _targetServiceUuid = "11111111-2222-3333-4444-555555555555"; 
-
   List<MySerialDevice> _scannedDevices = [];
   bool _isScanning = false;
   String? _savedMacAddress;
@@ -102,7 +56,7 @@ class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
       _scannedDevices.clear();
     });
 
-    final devices = await scanDevicesWithService(_targetServiceUuid);
+    final devices = await scanDevicesWithService();
 
     if (mounted) {
       setState(() {
