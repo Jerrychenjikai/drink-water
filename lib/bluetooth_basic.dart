@@ -93,8 +93,15 @@ class BleHardwareChannel implements IHardwareChannel {
   Future<bool> open(String path) async {
     try {
       _device = BluetoothDevice.fromId(path);
+      // 无论当前状态如何，先断开一次清理底层状态
+      await _device!.disconnect();
+      await Future.delayed(const Duration(milliseconds: 200));
+
       await _device!.connect(autoConnect: false, license: License.nonprofit);
-      
+
+      // 加上短暂的延时（例如 500 毫秒 - 1秒）
+      await Future.delayed(const Duration(milliseconds: 500)); 
+
       List<BluetoothService> services = await _device!.discoverServices();
       for (var service in services) {
         if (service.uuid.toString().toLowerCase() == serviceUuid) {
