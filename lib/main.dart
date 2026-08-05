@@ -8,6 +8,30 @@ import 'ui_asset.dart';
 import 'ui_basic.dart'; 
 import 'bluetooth_basic.dart'; // 包含 BleHardwareChannel 定义
 import 'bluetooth_search_page.dart';
+import 'water_record_page.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  preloadLiquidGlassShader();
+  runApp(const DrinkWaterApp());
+}
+
+class DrinkWaterApp extends StatelessWidget {
+  const DrinkWaterApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Drink Water',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.light,
+        fontFamily: '.SF Pro Display', 
+      ),
+      home: const HomePage(),
+    );
+  }
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -137,60 +161,79 @@ class _HomePageState extends State<HomePage> {
               // 2. 顶层内容：蓝牙连接面板
               SafeArea(
                 child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: LiquidGlassContainer(
-                      width: double.infinity,
-                      height: 380,
-                      borderRadius: 36,
-                      child: Padding(
-                        padding: const EdgeInsets.all(32.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            // 蓝牙状态图标
-                            Icon(
-                              _isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-                              size: 72,
-                              color: _isConnected ? Colors.blue.shade800 : Colors.black54,
-                            ),
-                            const SizedBox(height: 24),
-                            
-                            // 蓝牙状态文本
-                            Text(
-                              _isConnecting 
-                                  ? "正在连接设备..." 
-                                  : (_isConnected ? "已成功连接" : "未连接设备"),
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: _isConnected ? Colors.blue.shade900 : Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(height: 48),
-                            
-                            // 未连接时，给出手动连接按钮
-                            if (!_isConnected)
-                              liquidButton(
-                                onPressed: () async {
-                                  // 跳转到蓝牙搜索页，带 FluidRoute 模糊截图动画
-                                  await BluetoothSearchPage.push(context, _homepageKey);
-                                  // 当搜索页 Pop 弹回时，尝试发起新一轮连接
-                                  _tryConnect();
-                                },
-                                child: Text(
-                                  _isConnecting ? "连接中..." : "手动连接 / 搜索",
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    color: Colors.black87,
-                                    fontWeight: FontWeight.w600,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                        child: LiquidGlassContainer(
+                          width: double.infinity,
+                          height: 380,
+                          borderRadius: 36,
+                          child: Padding(
+                            padding: const EdgeInsets.all(32.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                // 蓝牙状态图标
+                                Icon(
+                                  _isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                                  size: 72,
+                                  color: _isConnected ? Colors.blue.shade800 : Colors.black54,
+                                ),
+                                const SizedBox(height: 24),
+                                
+                                // 蓝牙状态文本
+                                Text(
+                                  _isConnecting 
+                                      ? "正在连接设备..." 
+                                      : (_isConnected ? "已成功连接" : "未连接设备"),
+                                  style: TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                    color: _isConnected ? Colors.blue.shade900 : Colors.black87,
                                   ),
                                 ),
-                              ),
-                          ],
+                                const SizedBox(height: 48),
+                                
+                                // 未连接时，给出手动连接按钮
+                                if (!_isConnected)
+                                  liquidButton(
+                                    onPressed: () async {
+                                      _tryConnect();
+                                    },
+                                    child: Text(
+                                      _isConnecting ? "连接中..." : "再次尝试连接",
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.black87,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                      Row(
+                        children: [
+                          liquidButton(
+                            onPressed: () {
+                              // 一行代码轻松跳转并带截图动画
+                              WaterRecordPage.push(context, _homepageKey);
+                            },
+                            child: const Text("跳转到喝水记录页"),
+                          ),
+                          liquidButton(
+                            onPressed: () {
+                              // 一行代码轻松跳转并带截图动画
+                              BluetoothSearchPage.push(context, _homepageKey);
+                            },
+                            child: const Text("跳转到蓝牙配对页"),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
