@@ -135,7 +135,7 @@ class _FluidPageWrapperState extends State<FluidPageWrapper>
     const iosCurve = Cubic(0.16, 1.0, 0.3, 1.0);
 
     _topSlideAnim = Tween<Offset>(
-      begin: const Offset(0, -0.5),
+      begin: const Offset(0, -1),
       end: Offset.zero,
     ).animate(CurvedAnimation(
       parent: _controller,
@@ -143,7 +143,7 @@ class _FluidPageWrapperState extends State<FluidPageWrapper>
     ));
 
     _bottomSlideAnim = Tween<Offset>(
-      begin: const Offset(0, 0.5),
+      begin: const Offset(0, 1),
       end: Offset.zero,
     ).animate(CurvedAnimation(
       parent: _controller,

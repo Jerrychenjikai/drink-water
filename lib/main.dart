@@ -168,41 +168,43 @@ class _HomePageState extends State<HomePage> {
                           borderRadius: 36,
                           child: Padding(
                             padding: const EdgeInsets.all(32.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  _isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-                                  size: 72,
-                                  color: _isConnected ? Colors.blue.shade800 : Colors.black54,
-                                ),
-                                const SizedBox(height: 24),
-                                
-                                Text(
-                                  _isConnecting 
-                                      ? "正在连接设备..." 
-                                      : (_isConnected ? "已成功连接" : "未连接设备"),
-                                  style: TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.bold,
-                                    color: _isConnected ? Colors.blue.shade900 : Colors.black87,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    _isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                                    size: 72,
+                                    color: _isConnected ? Colors.blue.shade800 : Colors.black54,
                                   ),
-                                ),
-                                const SizedBox(height: 48),
-                                
-                                if (!_isConnected)
-                                  liquidButton(
-                                    onPressed: _tryConnect,
-                                    child: Text(
-                                      _isConnecting ? "连接中..." : "再次尝试连接",
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        color: Colors.black87,
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                  const SizedBox(height: 24),
+                                  
+                                  Text(
+                                    _isConnecting 
+                                        ? "正在连接设备..." 
+                                        : (_isConnected ? "已成功连接" : "未连接设备"),
+                                    style: TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                      color: _isConnected ? Colors.blue.shade900 : Colors.black87,
                                     ),
                                   ),
-                              ],
+                                  const SizedBox(height: 48),
+                                  
+                                  if (!_isConnected)
+                                    liquidButton(
+                                      onPressed: _tryConnect,
+                                      child: Text(
+                                        _isConnecting ? "连接中..." : "再次尝试连接",
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          color: Colors.black87,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
