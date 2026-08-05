@@ -21,7 +21,7 @@ bool oldDeviceConnected = false;
 std::queue<std::string> messageQueue;
 unsigned long lastTriggerTime = 0;
 
-// 监听蓝牙连接状态的回调类[cite: 1]
+// 监听蓝牙连接状态的回调类
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
@@ -35,7 +35,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
 // 监听蓝牙接收数据的回调类[cite: 1]
 class MyCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
-      String rxValue = pCharacteristic->getValue();
+      String rxValue = pCharacteristic->getValue().c_str();
       if (rxValue.length() > 0) {
         // 此处保留扩展双向传输的能力，可以接收 App 下发的控制指令
         Serial.print("收到来自 App 的指令: ");
@@ -58,29 +58,40 @@ void setup() {
   Serial.begin(115200);
   while (!Serial) { delay(10); }
 
-  BLEDevice::init(BLE_DEVICE_NAME);[cite: 1]
+  BLEDevice::init(BLE_DEVICE_NAME);
   
-  pServer = BLEDevice::createServer();[cite: 1]
-  pServer->setCallbacks(new MyServerCallbacks());[cite: 1]
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
 
-  BLEService *pService = pServer->createService(SERVICE_UUID);[cite: 1]
+  BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // 创建发送特征值 (TX)，允许通知 (Notify)[cite: 1]
+  // 创建发送特征值 (TX)，允许通知 (Notify)
   pTxCharacteristic = pService->createCharacteristic(
                       CHARACTERISTIC_UUID_TX,
                       BLECharacteristic::PROPERTY_NOTIFY
                     );
-  pTxCharacteristic->addDescriptor(new BLE2902());[cite: 1]
+  pTxCharacteristic->addDescriptor(new BLE2902());
 
   // 创建接收特征值 (RX)，允许写入 (Write)[cite: 1]
   BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
                        CHARACTERISTIC_UUID_RX,
                        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
                      );
-  pRxCharacteristic->setCallbacks(new MyCallbacks());[cite: 1]
+  pRxCharacteristic->setCallbacks(new MyCallbacks());
 
-  pService->start();[cite: 1]
-  pServer->getAdvertising()->start();[cite: 1]
+  // 替换后：
+  pService->start();
+
+  // 配置广播，将 Service UUID 塞入广播包
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  
+  // 帮助解决部分苹果设备连接兼容性问题（可选）
+  pAdvertising->setMinPreferred(0x06);  
+  pAdvertising->setMinPreferred(0x12);
+  
+  BLEDevice::startAdvertising();
 }
 
 void loop() {
