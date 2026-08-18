@@ -1,16 +1,16 @@
 import 'dart:async';
+import 'dart:convert'; // 新增：用于 JSON 编码
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // 引入蓝牙库
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 
- // 使用完全自定义的 UUID 替换原 Nordic UART UUID
-  const String serviceUuid = "11111111-2222-3333-4444-555555555555";
-  // 注意：App 的接收 (Notify) 对应的是 ESP32 的发送 (TX)
-  const String rxUuid      = "11111111-2222-3333-4444-555555555557"; 
-  // App 的发送 (Write) 对应的是 ESP32 的接收 (RX)
-  const String txUuid      = "11111111-2222-3333-4444-555555555556"; 
-
+// 使用完全自定义的 UUID 替换原 Nordic UART UUID
+const String serviceUuid = "11111111-2222-3333-4444-555555555555";
+// 注意：App 的接收 (Notify) 对应的是 ESP32 的发送 (TX)
+const String rxUuid      = "11111111-2222-3333-4444-555555555557"; 
+// App 的发送 (Write) 对应的是 ESP32 的接收 (RX)
+const String txUuid      = "11111111-2222-3333-4444-555555555556"; 
 
 /// 统一的串行设备模型
 class MySerialDevice {
@@ -33,12 +33,26 @@ class MySerialDevice {
   int get hashCode => devicePath.hashCode;
 }
 
+/// 发送当前时间到单片机的独立函数
+Future<void> syncCurrentTimeToDevice(IHardwareChannel channel) async {
+  // 生成当前标准 ISO8601 时间（如：2026-08-17T22:47:49Z）
+  final now = DateTime.now().toUtc();
+  final isoStr = "${now.toIso8601String().split('.')[0]}Z"; 
+  
+  final payload = jsonEncode({
+    'type': 'current time',
+    'time': isoStr
+  });
+  
+  // 将 JSON 字符串转为 UTF-8 字节并写入通道
+  await channel.writeData(Uint8List.fromList(utf8.encode(payload)));
+}
+
 /// 改写后的扫描函数：支持传入具体的 Service UUID 过滤设备
 Future<List<MySerialDevice>> scanDevicesWithService({String targetServiceUuid = serviceUuid}) async {
   List<MySerialDevice> availableDevices = [];
-
+  // ... (保留原 scanDevicesWithService 代码不变)[cite: 1]
   try {
-    // Android 端动态申请蓝牙和定位权限
     if (Platform.isAndroid) {
       await [
         Permission.location,
@@ -47,13 +61,11 @@ Future<List<MySerialDevice>> scanDevicesWithService({String targetServiceUuid = 
       ].request();
     }
     
-    // 开始扫描，利用 withServices 根据 Service ID 过滤，持续 3 秒
     await FlutterBluePlus.startScan(
       withServices: [Guid(targetServiceUuid)],
       timeout: const Duration(seconds: 3)
     );
     
-    // 等待扫描结束
     await FlutterBluePlus.isScanning.where((val) => val == false).first;
     
     for (ScanResult r in FlutterBluePlus.lastScanResults) {
@@ -61,7 +73,7 @@ Future<List<MySerialDevice>> scanDevicesWithService({String targetServiceUuid = 
         availableDevices.add(
           MySerialDevice(
             name: r.device.platformName, 
-            devicePath: r.device.remoteId.str, // MAC Address
+            devicePath: r.device.remoteId.str, 
           ),
         );
       }
@@ -73,7 +85,6 @@ Future<List<MySerialDevice>> scanDevicesWithService({String targetServiceUuid = 
   return availableDevices;
 }
 
-
 abstract class IHardwareChannel {
   Future<bool> open(String path);
   Future<void> configure({required int baudRate, required int dataBits, required int stopBits, required int parity});
@@ -84,8 +95,8 @@ abstract class IHardwareChannel {
 
 class BleHardwareChannel implements IHardwareChannel {
   BluetoothDevice? _device;
-  BluetoothCharacteristic? _txChar; // 写入特征 (App 发送 -> ESP32 接收)
-  BluetoothCharacteristic? _rxChar; // 接收特征 (App 接收 <- ESP32 发送)
+  BluetoothCharacteristic? _txChar;
+  BluetoothCharacteristic? _rxChar;
   StreamController<Uint8List>? _streamController;
   StreamSubscription? _subscription;
 
@@ -93,13 +104,10 @@ class BleHardwareChannel implements IHardwareChannel {
   Future<bool> open(String path) async {
     try {
       _device = BluetoothDevice.fromId(path);
-      // 无论当前状态如何，先断开一次清理底层状态
       await _device!.disconnect();
       await Future.delayed(const Duration(milliseconds: 200));
 
       await _device!.connect(autoConnect: false, license: License.nonprofit);
-
-      // 加上短暂的延时（例如 500 毫秒 - 1秒）
       await Future.delayed(const Duration(milliseconds: 500)); 
 
       List<BluetoothService> services = await _device!.discoverServices();
@@ -122,10 +130,8 @@ class BleHardwareChannel implements IHardwareChannel {
 
       _streamController = StreamController<Uint8List>.broadcast();
       
-      // 开启通知监听数据
       await _rxChar!.setNotifyValue(true);
       _subscription = _rxChar!.onValueReceived.listen((data) {
-        // 在这里收到的是 JSON 字符串的 UTF-8 字节，可以传到上层统一解析
         _streamController?.add(Uint8List.fromList(data));
       });
 
@@ -137,13 +143,10 @@ class BleHardwareChannel implements IHardwareChannel {
   }
 
   @override
-  Future<void> configure({required int baudRate, required int dataBits, required int stopBits, required int parity}) async {
-    // 留空即可
-  }
+  Future<void> configure({required int baudRate, required int dataBits, required int stopBits, required int parity}) async {}
 
   @override
   Future<void> writeData(Uint8List data) async {
-    // 保留向 ESP32 下发数据的能力（双向扩展）
     if (_txChar != null) await _txChar!.write(data, withoutResponse: true);
   }
 

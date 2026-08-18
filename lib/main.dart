@@ -87,6 +87,8 @@ class _HomePageState extends State<HomePage> {
         
         if (success && mounted) {
           setState(() => _isConnected = true);
+
+          await syncCurrentTimeToDevice(_bleChannel!);
           
           // 监听蓝牙数据流
           _bleSubscription = _bleChannel!.listenStream.listen(
