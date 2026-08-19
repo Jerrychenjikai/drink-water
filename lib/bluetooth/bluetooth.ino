@@ -4,15 +4,20 @@
 #include <BLE2902.h>
 #include <queue>
 #include <string>
-#include <time.h>     // 用于标准时间处理
-#include "esp_pm.h"   // [新增] 用于配置电源管理模式
+#include <time.h>     
+#include "esp_pm.h"   
+#include "HX711.h"    
 
 #define BLE_DEVICE_NAME "ESP32S3_SmartBottle"
 
-// 与 Flutter 端匹配的自定义 UUID
 #define SERVICE_UUID           "11111111-2222-3333-4444-555555555555" 
-#define CHARACTERISTIC_UUID_RX "11111111-2222-3333-4444-555555555556" // ESP32 接收 (对应 App Tx)
-#define CHARACTERISTIC_UUID_TX "11111111-2222-3333-4444-555555555557" // ESP32 发送 (对应 App Rx)
+#define CHARACTERISTIC_UUID_RX "11111111-2222-3333-4444-555555555556" 
+#define CHARACTERISTIC_UUID_TX "11111111-2222-3333-4444-555555555557" 
+
+// HX711 引脚定义
+const int HX711_DOUT = 4;
+const int HX711_SCK = 5;
+HX711 scale;
 
 BLEServer *pServer = NULL;
 BLECharacteristic *pTxCharacteristic = NULL;
@@ -25,15 +30,22 @@ struct DrinkRecord {
     unsigned long eventMillis;
 };
 std::queue<DrinkRecord> messageQueue;
-unsigned long lastTriggerTime = 0;
 
 // ====== 2. 时间同步状态 ======
 bool hasTimeRecord = false;
 unsigned long timeSyncMillis = 0;
 time_t timeSyncEpoch = 0;
+
+// ====== 3. 状态检测与防抖变量 ======
+float currentWeight = 0.0;
+float lastStableWeight = 0.0;
+unsigned long lastWeightChangeTime = 0;
+
+const float WEIGHT_THRESHOLD = 3.0;      
+const unsigned long STABLE_DELAY = 2000; 
+
 // ======================================
 
-// 监听蓝牙连接状态的回调类
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
@@ -44,7 +56,6 @@ class MyServerCallbacks: public BLEServerCallbacks {
     }
 };
 
-// 监听蓝牙接收数据的回调类
 class MyCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
       String rxValue = pCharacteristic->getValue().c_str();
@@ -53,18 +64,15 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         Serial.print("收到来自 App 的指令: ");
         Serial.println(rxValue.c_str());
 
-        // 解析包含 current time 的 JSON，获取同步时间点
         if (rxValue.indexOf("\"current time\"") > 0) {
             int timeIndex = rxValue.indexOf("\"time\"");
             if (timeIndex > 0) {
-                // 定位 ISO8601 时间字符串并简单裁剪解析
                 int start = rxValue.indexOf("\"", timeIndex + 6) + 1;
                 int end = rxValue.indexOf("\"", start);
 
                 if (start > 0 && end > start) {
                     String tStr = rxValue.substring(start, end);
                     int y, mo, d, h, m, s;
-                    // 通过 sscanf 将类似 2026-08-17T22:47:49Z 的文本转为数字
                     if (sscanf(tStr.c_str(), "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &m, &s) == 6) {
                         struct tm t = {0};
                         t.tm_year = y - 1900;
@@ -74,8 +82,8 @@ class MyCallbacks: public BLECharacteristicCallbacks {
                         t.tm_min = m;
                         t.tm_sec = s;
                         
-                        timeSyncEpoch = mktime(&t);    // 记录基准绝对时间秒数
-                        timeSyncMillis = millis();     // 记录接收基准时的相对开机时间（毫秒）
+                        timeSyncEpoch = mktime(&t);    
+                        timeSyncMillis = millis();     
                         hasTimeRecord = true;
                         
                         Serial.println("MCU 已成功同步绝对时间！");
@@ -87,7 +95,6 @@ class MyCallbacks: public BLECharacteristicCallbacks {
     }
 };
 
-// ====== 3. 将任意记录时的 millis 转换为绝对时间 ======
 std::string getAbsoluteTime(unsigned long eventMillis) {
     long diffSeconds = (long)(eventMillis - timeSyncMillis) / 1000;
     time_t eventEpoch = timeSyncEpoch + diffSeconds;
@@ -104,18 +111,22 @@ std::string getAbsoluteTime(unsigned long eventMillis) {
 void setup() {
   Serial.begin(115200);
   
-  // 确保时区设置为 GMT 以防 mktime 计算偏移出错
   setenv("TZ", "GMT0", 1);
   tzset();
 
-  // [新增] 配置底层电源管理，允许动态调频和进入自动 Light-sleep
-  esp_pm_config_esp32c3_t pm_config = {
+  esp_pm_config_esp32s3_t pm_config = {
       .max_freq_mhz = 160,
-      .min_freq_mhz = 10,   // 空闲时 CPU 降频至 10MHz
-      .light_sleep_enable = true // 允许自动进入 Light-sleep
+      .min_freq_mhz = 10,   
+      .light_sleep_enable = true 
   };
   esp_pm_configure(&pm_config);
   
+  scale.begin(HX711_DOUT, HX711_SCK);
+  scale.set_scale(228.0); 
+  delay(500);
+  scale.tare();           
+  Serial.println("HX711 初始化并去皮完成...");
+
   BLEDevice::init(BLE_DEVICE_NAME);
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -139,27 +150,49 @@ void setup() {
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(true);
-  
-  // [修改] 降低蓝牙广播频率，间隔设为 2 秒
-  // 蓝牙时间单位为 0.625ms，因此 2000ms / 0.625 = 3200 (十六进制为 0x0C80)
   pAdvertising->setMinInterval(0x0C80);  
   pAdvertising->setMaxInterval(0x0C80);
-  
   BLEDevice::startAdvertising();
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // 1. 数据采集与压栈完全独立，不受任何时间同步限制
-  if (currentMillis - lastTriggerTime >= 5000) {
-      lastTriggerTime = currentMillis;
-      int randomVolume = random(50, 300); 
-      messageQueue.push({randomVolume, currentMillis});
-      Serial.printf("数据已压入队列，水量: %d, 相对时间: %lu\n", randomVolume, currentMillis);
+  // ====== 1. 唤醒 HX711 ======
+  scale.power_up();
+
+  // 等待数据准备就绪。HX711 唤醒后大概需要 100ms 才能出第一个数据。
+  // 设置 150ms 超时，防止发生引脚故障时程序死锁。
+  if (scale.wait_ready_timeout(500)) {
+      for(int i=0;i<3;i++) scale.get_units(1);
+      float newWeight = scale.get_units(1); 
+      Serial.printf("当前重量：%.10f\n", newWeight);
+
+      long rawValue = scale.read();
+      Serial.printf("HX711 原始读数：%ld\n", rawValue);
+
+      // 物理防抖逻辑
+      if (abs(newWeight - currentWeight) > WEIGHT_THRESHOLD) {
+          currentWeight = newWeight;
+          lastWeightChangeTime = currentMillis; 
+      } 
+      else {
+          if (currentMillis - lastWeightChangeTime > STABLE_DELAY) {
+              if (abs(currentWeight - lastStableWeight) > WEIGHT_THRESHOLD) {
+                  lastStableWeight = currentWeight;
+                  
+                  if (currentWeight > 0) {
+                      messageQueue.push({(int)currentWeight, currentMillis});
+                      Serial.printf("检测到重量稳定！推入队列: %d, 相对时间: %lu\n", (int)currentWeight, currentMillis);
+                  }
+              }
+          }
+      }
+  } else {
+      Serial.println("读取失败: HX711 未响应");
   }
 
-  // 2. 发送逻辑：只有在蓝牙连接且【拥有时间基准】时，才出栈发送
+  // ====== 2. 数据发送逻辑 ======
   if (deviceConnected && !messageQueue.empty() && hasTimeRecord) {
       DrinkRecord record = messageQueue.front();
       messageQueue.pop(); 
@@ -174,11 +207,10 @@ void loop() {
       pTxCharacteristic->notify();
       
       Serial.printf("BLE 发送成功: %s\n", msg.c_str());
-      // 发送时保持短延时避免 App 漏包
       delay(100); 
   }
 
-  // 3. 处理蓝牙断开重连的逻辑
+  // ====== 3. 断开重连 ======
   if (!deviceConnected && oldDeviceConnected) {
       delay(500); 
       pServer->startAdvertising();
@@ -191,7 +223,10 @@ void loop() {
       Serial.println("蓝牙连接建立！准备推送积压队列...");
   }
 
-  // [新增] 让出 CPU 控制权，触发 FreeRTOS 调度
-  // 这允许系统在空闲时关闭射频（Modem-sleep）或暂停 CPU（Light-sleep）
-  delay(50); 
+  // ====== 4. 断电休眠 ======
+  // 将 HX711 掉电，功耗降至 1uA 以下
+  scale.power_down(); 
+  
+  // 延长 delay，让 ESP32 拥有长达 200ms 的完整空闲时间进入 Light-sleep
+  delay(200); 
 }
