@@ -163,7 +163,7 @@ void loop() {
 
   // 等待数据准备就绪。HX711 唤醒后大概需要 100ms 才能出第一个数据。
   // 设置 150ms 超时，防止发生引脚故障时程序死锁。
-  if (scale.wait_ready_timeout(500)) {
+  if (scale.wait_ready_timeout(1500)) {
       for(int i=0;i<3;i++) scale.get_units(1);
       float newWeight = scale.get_units(1); 
       Serial.printf("当前重量：%.10f\n", newWeight);
