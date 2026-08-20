@@ -8,86 +8,90 @@
 #include "esp_pm.h"   
 #include "HX711.h"    
 
-#define BLE_DEVICE_NAME "ESP32S3_SmartBottle"
-
+// ==================== 1. 全局常量配置 ====================
+#define BLE_DEVICE_NAME        "ESP32S3_SmartBottle"
 #define SERVICE_UUID           "11111111-2222-3333-4444-555555555555" 
 #define CHARACTERISTIC_UUID_RX "11111111-2222-3333-4444-555555555556" 
 #define CHARACTERISTIC_UUID_TX "11111111-2222-3333-4444-555555555557" 
 
-// HX711 引脚定义
-const int HX711_DOUT = 4;
-const int HX711_SCK = 5;
-HX711 scale;
+// 硬件引脚配置
+#define HX711_DOUT_PIN         4
+#define HX711_SCK_PIN          5
+#define HX711_SCALE_FACTOR     228.0f
 
+// 喝水算法参数配置
+#define WEIGHT_THRESHOLD       3.0f     // 物理防抖判定门限（g）
+#define STABLE_DELAY           2000     // 读数稳定等待时间（ms）
+#define LIFT_THRESHOLD         100.0f   // 判定为“拿起/放回”的最小重量变化（g），建议小于空杯重
+#define MIN_DRINK_VOL          10.0f    // 最小有效喝水记录水量（g），低于此值不入列
+
+// ==================== 2. 数据结构定义 ====================
+struct DrinkRecord {
+    int volume;                  // 喝水量 (g)
+    unsigned long eventMillis;   // 发生的相对时间戳
+};
+
+struct BottleDetectorState {
+    float currentWeight = 0.0f;       // 当前实时重量
+    float lastStableWeight = 0.0f;    // 上一次稳定的读数
+    float lastValidWeight = 0.0f;     // M1: 拿起前的稳定基准重量
+    float liftedMinWeight = 0.0f;     // M2 (过程极小值): 拿起期间检测到的最低重量
+    bool isLifted = false;             // 状态标识：水杯是否离开秤面
+    bool initialized = false;          // 是否已完成首次基准初始化
+    unsigned long lastWeightChangeTime = 0; // 最后一次重量发生波动的时间点
+};
+
+// ==================== 3. 全局对象与变量 ====================
+HX711 scale;
 BLEServer *pServer = NULL;
 BLECharacteristic *pTxCharacteristic = NULL;
+std::queue<DrinkRecord> messageQueue;
+BottleDetectorState g_detector;
+
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 
-// ====== 1. 结构体与队列 ======
-struct DrinkRecord {
-    int volume;
-    unsigned long eventMillis;
-};
-std::queue<DrinkRecord> messageQueue;
-
-// ====== 2. 时间同步状态 ======
+// 时间同步状态
 bool hasTimeRecord = false;
 unsigned long timeSyncMillis = 0;
 time_t timeSyncEpoch = 0;
 
-// ====== 3. 状态检测与防抖变量 ======
-float currentWeight = 0.0;
-float lastStableWeight = 0.0;
-unsigned long lastWeightChangeTime = 0;
-
-const float WEIGHT_THRESHOLD = 3.0;      
-const unsigned long STABLE_DELAY = 2000; 
-
-// ======================================
-
+// ==================== 4. 蓝牙回调类 ====================
 class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
+    void onConnect(BLEServer* pServer) override {
       deviceConnected = true;
-    };
-
-    void onDisconnect(BLEServer* pServer) {
+    }
+    void onDisconnect(BLEServer* pServer) override {
       deviceConnected = false;
     }
 };
 
 class MyCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
+    void onWrite(BLECharacteristic *pCharacteristic) override {
       String rxValue = pCharacteristic->getValue().c_str();
 
-      if (rxValue.length() > 0) {
-        Serial.print("收到来自 App 的指令: ");
-        Serial.println(rxValue.c_str());
+      if (rxValue.length() > 0 && rxValue.indexOf("\"current time\"") > 0) {
+        int timeIndex = rxValue.indexOf("\"time\"");
+        if (timeIndex > 0) {
+            int start = rxValue.indexOf("\"", timeIndex + 6) + 1;
+            int end = rxValue.indexOf("\"", start);
 
-        if (rxValue.indexOf("\"current time\"") > 0) {
-            int timeIndex = rxValue.indexOf("\"time\"");
-            if (timeIndex > 0) {
-                int start = rxValue.indexOf("\"", timeIndex + 6) + 1;
-                int end = rxValue.indexOf("\"", start);
-
-                if (start > 0 && end > start) {
-                    String tStr = rxValue.substring(start, end);
-                    int y, mo, d, h, m, s;
-                    if (sscanf(tStr.c_str(), "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &m, &s) == 6) {
-                        struct tm t = {0};
-                        t.tm_year = y - 1900;
-                        t.tm_mon = mo - 1;
-                        t.tm_mday = d;
-                        t.tm_hour = h;
-                        t.tm_min = m;
-                        t.tm_sec = s;
-                        
-                        timeSyncEpoch = mktime(&t);    
-                        timeSyncMillis = millis();     
-                        hasTimeRecord = true;
-                        
-                        Serial.println("MCU 已成功同步绝对时间！");
-                    }
+            if (start > 0 && end > start) {
+                String tStr = rxValue.substring(start, end);
+                int y, mo, d, h, m, s;
+                if (sscanf(tStr.c_str(), "%d-%d-%dT%d:%d:%dZ", &y, &mo, &d, &h, &m, &s) == 6) {
+                    struct tm t = {0};
+                    t.tm_year = y - 1900;
+                    t.tm_mon = mo - 1;
+                    t.tm_mday = d;
+                    t.tm_hour = h;
+                    t.tm_min = m;
+                    t.tm_sec = s;
+                    
+                    timeSyncEpoch = mktime(&t);    
+                    timeSyncMillis = millis();     
+                    hasTimeRecord = true;
+                    Serial.println("MCU 已成功同步绝对时间！");
                 }
             }
         }
@@ -95,6 +99,7 @@ class MyCallbacks: public BLECharacteristicCallbacks {
     }
 };
 
+// ==================== 5. 辅助函数 ====================
 std::string getAbsoluteTime(unsigned long eventMillis) {
     long diffSeconds = (long)(eventMillis - timeSyncMillis) / 1000;
     time_t eventEpoch = timeSyncEpoch + diffSeconds;
@@ -108,12 +113,83 @@ std::string getAbsoluteTime(unsigned long eventMillis) {
     return std::string(timeBuf);
 }
 
+// 核心喝水检测状态机（已修复初始化死锁问题）
+void processWeightDetection(unsigned long currentMillis, float newWeight) {
+    // 1. 物理防抖检测
+    if (abs(newWeight - g_detector.currentWeight) > WEIGHT_THRESHOLD) {
+        g_detector.currentWeight = newWeight;
+        g_detector.lastWeightChangeTime = currentMillis; 
+        
+        // 如果处在被拿起状态，不断更新离秤期间的最低读数
+        if (g_detector.isLifted && newWeight < g_detector.liftedMinWeight) {
+            g_detector.liftedMinWeight = newWeight;
+        }
+    } 
+    else {
+        // 2. 读数稳定满 STABLE_DELAY 毫秒
+        if (currentMillis - g_detector.lastWeightChangeTime > STABLE_DELAY) {
+            
+            // 【修正重点】未初始化时，只要读数静止满 2 秒，无需触发重量差变化，直接锁定 M1
+            if (!g_detector.initialized) {
+                g_detector.lastStableWeight = g_detector.currentWeight;
+                g_detector.lastValidWeight = g_detector.currentWeight;
+                g_detector.initialized = true;
+                Serial.printf("【初始化成功】检测到系统静止，基准重量 M1 锁定为: %.1f g\n", g_detector.lastValidWeight);
+                return;
+            }
+
+            // 初始化完成后，才触发重量突变的状态切换逻辑
+            if (abs(g_detector.currentWeight - g_detector.lastStableWeight) > WEIGHT_THRESHOLD) {
+                g_detector.lastStableWeight = g_detector.currentWeight;
+
+                if (!g_detector.isLifted) {
+                    // 【状态 A：水杯在秤上】
+                    if (g_detector.currentWeight < g_detector.lastValidWeight - LIFT_THRESHOLD) {
+                        g_detector.isLifted = true;
+                        g_detector.liftedMinWeight = g_detector.currentWeight;
+                        Serial.println("【状态切换】水杯被拿起，锁定基准重量 M1");
+                    } 
+                    else {
+                        // 未达拿起门限，平滑更新基准
+                        g_detector.lastValidWeight = g_detector.currentWeight;
+                    }
+                } 
+                else {
+                    // 【状态 B：水杯已被拿起】
+                    if (g_detector.currentWeight > g_detector.liftedMinWeight + LIFT_THRESHOLD) {
+                        float drinkAmount = g_detector.lastValidWeight - g_detector.currentWeight; // M1 - M3
+                        
+                        if (drinkAmount >= MIN_DRINK_VOL) {
+                            messageQueue.push({(int)drinkAmount, currentMillis});
+                            Serial.printf("【喝水成功】喝水量: %d g (M1: %.1f -> M3: %.1f)\n", 
+                                          (int)drinkAmount, g_detector.lastValidWeight, g_detector.currentWeight);
+                        } 
+                        else if (drinkAmount <= -MIN_DRINK_VOL) {
+                            Serial.printf("【检测加水】增加水量: %d g\n", (int)(-drinkAmount));
+                        } 
+                        else {
+                            Serial.println("【状态结算】水杯已放回，水量基本无变化");
+                        }
+
+                        // 结算完毕：更新基准 M1，重置状态
+                        g_detector.lastValidWeight = g_detector.currentWeight;
+                        g_detector.isLifted = false;
+                        Serial.println("【状态切换】水杯已放回，更新基准重量 M1");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 6. Arduino 主程序 ====================
 void setup() {
   Serial.begin(115200);
   
   setenv("TZ", "GMT0", 1);
   tzset();
 
+  // 低功耗配置
   esp_pm_config_esp32s3_t pm_config = {
       .max_freq_mhz = 160,
       .min_freq_mhz = 10,   
@@ -121,12 +197,13 @@ void setup() {
   };
   esp_pm_configure(&pm_config);
   
-  scale.begin(HX711_DOUT, HX711_SCK);
-  scale.set_scale(228.0); 
+  // HX711 初始化
+  scale.begin(HX711_DOUT_PIN, HX711_SCK_PIN);
+  scale.set_scale(HX711_SCALE_FACTOR); 
   delay(500);
   scale.tare();           
-  Serial.println("HX711 初始化并去皮完成...");
 
+  // BLE 初始化
   BLEDevice::init(BLE_DEVICE_NAME);
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -158,41 +235,21 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // ====== 1. 唤醒 HX711 ======
+  // 1. 唤醒并读取重量
   scale.power_up();
 
-  // 等待数据准备就绪。HX711 唤醒后大概需要 100ms 才能出第一个数据。
-  // 设置 150ms 超时，防止发生引脚故障时程序死锁。
   if (scale.wait_ready_timeout(1500)) {
-      for(int i=0;i<3;i++) scale.get_units(1);
+      for(int i = 0; i < 3; i++) scale.get_units(1);
       float newWeight = scale.get_units(1); 
-      Serial.printf("当前重量：%.10f\n", newWeight);
 
-      long rawValue = scale.read();
-      Serial.printf("HX711 原始读数：%ld\n", rawValue);
-
-      // 物理防抖逻辑
-      if (abs(newWeight - currentWeight) > WEIGHT_THRESHOLD) {
-          currentWeight = newWeight;
-          lastWeightChangeTime = currentMillis; 
-      } 
-      else {
-          if (currentMillis - lastWeightChangeTime > STABLE_DELAY) {
-              if (abs(currentWeight - lastStableWeight) > WEIGHT_THRESHOLD) {
-                  lastStableWeight = currentWeight;
-                  
-                  if (currentWeight > 0) {
-                      messageQueue.push({(int)currentWeight, currentMillis});
-                      Serial.printf("检测到重量稳定！推入队列: %d, 相对时间: %lu\n", (int)currentWeight, currentMillis);
-                  }
-              }
-          }
-      }
-  } else {
+      // 运行喝水检测状态机
+      processWeightDetection(currentMillis, newWeight);
+  } 
+  else {
       Serial.println("读取失败: HX711 未响应");
   }
 
-  // ====== 2. 数据发送逻辑 ======
+  // 2. BLE 队列数据发送
   if (deviceConnected && !messageQueue.empty() && hasTimeRecord) {
       DrinkRecord record = messageQueue.front();
       messageQueue.pop(); 
@@ -210,7 +267,7 @@ void loop() {
       delay(100); 
   }
 
-  // ====== 3. 断开重连 ======
+  // 3. 断开重连控制
   if (!deviceConnected && oldDeviceConnected) {
       delay(500); 
       pServer->startAdvertising();
@@ -220,13 +277,10 @@ void loop() {
   
   if (deviceConnected && !oldDeviceConnected) {
       oldDeviceConnected = deviceConnected;
-      Serial.println("蓝牙连接建立！准备推送积压队列...");
+      Serial.println("蓝牙连接建立！");
   }
 
-  // ====== 4. 断电休眠 ======
-  // 将 HX711 掉电，功耗降至 1uA 以下
+  // 4. 进入休眠
   scale.power_down(); 
-  
-  // 延长 delay，让 ESP32 拥有长达 200ms 的完整空闲时间进入 Light-sleep
   delay(200); 
 }
