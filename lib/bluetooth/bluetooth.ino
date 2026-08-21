@@ -17,7 +17,7 @@
 // 硬件引脚配置
 #define HX711_DOUT_PIN         4
 #define HX711_SCK_PIN          5
-#define HX711_SCALE_FACTOR     228.0f
+#define HX711_SCALE_FACTOR     392.16f
 
 // 喝水算法参数配置
 #define WEIGHT_THRESHOLD       3.0f     // 物理防抖判定门限（g）
