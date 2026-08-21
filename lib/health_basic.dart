@@ -1,6 +1,19 @@
 import 'package:health/health.dart';
 
 class WaterTrackingService {
+  // === 【新增单例模式代码】 ===
+  // 1. 提供一个私有的命名构造函数
+  WaterTrackingService._internal();
+  
+  // 2. 保存全局唯一的实例
+  static final WaterTrackingService _instance = WaterTrackingService._internal();
+  
+  // 3. 提供工厂构造函数。这样外部调用 WaterTrackingService() 时，始终返回这个单例
+  factory WaterTrackingService() {
+    return _instance;
+  }
+  // ==========================
+  
   // 1. 实例化 Health 插件
   final Health _health = Health();
 

@@ -3,12 +3,14 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'; // 【新增】引入 flutter_blue_plus 以监听底层连接状态
 
 import 'ui_asset.dart';
 import 'ui_basic.dart'; 
 import 'bluetooth_basic.dart'; 
 import 'bluetooth_search_page.dart';
 import 'water_record_page.dart';
+import 'health_basic.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +46,10 @@ class _HomePageState extends State<HomePage> {
   final GlobalKey _homepageKey = GlobalKey();
   
   BleHardwareChannel? _bleChannel;
-  StreamSubscription? _bleSubscription; // 1. 保存流订阅，防止重复监听
+  StreamSubscription? _bleSubscription;
+  StreamSubscription<BluetoothConnectionState>? _deviceStateSubscription; // 【新增】用于监听设备连接状态
+  
+  final WaterTrackingService _waterTracking = WaterTrackingService();
   
   bool _isConnected = false;
   bool _isConnecting = false;
@@ -52,7 +57,6 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    // 2. 将自动连接移至 initState 阶段，只在页面初始化时触发一次
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _tryConnect();
     });
@@ -60,12 +64,12 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    _bleSubscription?.cancel(); // 清理流监听
+    _bleSubscription?.cancel(); 
+    _deviceStateSubscription?.cancel(); // 【新增】释放状态监听
     _bleChannel?.closeAndDispose(); 
     super.dispose();
   }
 
-  /// 尝试从 SharedPreferences 读取 MAC 地址并建立蓝牙连接
   Future<void> _tryConnect() async {
     if (_isConnecting || _isConnected) return;
     
@@ -78,8 +82,8 @@ class _HomePageState extends State<HomePage> {
       final mac = prefs.getString('saved_ble_mac');
       
       if (mac != null && mac.isNotEmpty) {
-        // 断开并释放上一次连接与监听
         await _bleSubscription?.cancel();
+        await _deviceStateSubscription?.cancel(); // 【新增】断开前清理旧的状态监听
         _bleChannel?.closeAndDispose(); 
         
         _bleChannel = BleHardwareChannel();
@@ -102,6 +106,14 @@ class _HomePageState extends State<HomePage> {
               if (mounted) setState(() => _isConnected = false);
             },
           );
+
+          // 【新增】利用 flutter_blue_plus 监听当前 MAC 设备的底层连接状态
+          // 当单片机断电、重启或超出距离时，会自动触发断开事件并更新 UI
+          _deviceStateSubscription = BluetoothDevice.fromId(mac).connectionState.listen((state) {
+            if (state == BluetoothConnectionState.disconnected) {
+              if (mounted) setState(() => _isConnected = false);
+            }
+          });
         } else {
           if (mounted) setState(() => _isConnected = false);
         }
@@ -116,18 +128,37 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 处理收到的蓝牙消息
-  void _handleBleMessage(Uint8List data) {
+  Future<void> _handleBleMessage(Uint8List data) async {
     try {
       final String jsonStr = utf8.decode(data);
       final Map<String, dynamic> message = jsonDecode(jsonStr);
       
+      double? milliliters;
+      if (message.containsKey('volume')) {
+        milliliters = (message['volume'] as num).toDouble();
+      } else if (message.containsKey('ml')) {
+        milliliters = (message['ml'] as num).toDouble();
+      }
+
+      bool recordSuccess = false;
+
+      if (milliliters != null && milliliters > 0) {
+        bool granted = await _waterTracking.requestPermissions();
+        if (granted) {
+          recordSuccess = await _waterTracking.recordWaterIntake(milliliters: milliliters);
+        }
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('收到蓝牙消息: $message'),
-            duration: const Duration(milliseconds: 400),
+            content: Text(
+              milliliters != null 
+                ? '收到蓝牙消息: $message\n自动同步健康数据: ${recordSuccess ? "成功" : "失败"}'
+                : '收到蓝牙消息: $message'
+            ),
+            duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -139,8 +170,6 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // 移除原先在 build 方法里的 Future.microtask 自动连接逻辑
-
     return LiquidGlassScope(
       painter: GradientBackgroundPainter(),
       child: Scaffold(
@@ -149,14 +178,12 @@ class _HomePageState extends State<HomePage> {
           key: _homepageKey,
           child: Stack(
             children: [
-              // 1. 底层 UI 渐变背景
               Positioned.fill(
                 child: CustomPaint(
                   painter: GradientBackgroundPainter(),
                 ),
               ),
               
-              // 2. 顶层内容：蓝牙连接面板
               SafeArea(
                 child: Center(
                   child: Column(
@@ -212,7 +239,6 @@ class _HomePageState extends State<HomePage> {
                         ),
                       ),
                       const SizedBox(height: 20),
-                      // 3. 使用 Expanded 防止横向按钮排版溢出
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24.0),
                         child: Row(
@@ -229,7 +255,6 @@ class _HomePageState extends State<HomePage> {
                             Expanded(
                               child: liquidButton(
                                 onPressed: () async {
-                                  // 从搜索配对页返回后，自动尝试连接新选中的设备
                                   await BluetoothSearchPage.push(context, _homepageKey);
                                   _tryConnect();
                                 },
