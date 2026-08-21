@@ -140,12 +140,28 @@ class _HomePageState extends State<HomePage> {
         milliliters = (message['ml'] as num).toDouble();
       }
 
+      DateTime? drinkTime;
+      if (message.containsKey('time')) {
+        try {
+          // 硬件端发送的时间带有 'Z' (如 "2026-08-20T10:02:19Z")，说明是 UTC 时间[cite: 3]
+          // DateTime.parse 会自动识别它，随后调用 toLocal() 转换为设备所在时区
+          drinkTime = DateTime.parse(message['time']).toLocal();
+        } catch (e) {
+          debugPrint("解析时间字段失败: $e");
+        }
+      }
+      // ===========================================
+
       bool recordSuccess = false;
 
       if (milliliters != null && milliliters > 0) {
         bool granted = await _waterTracking.requestPermissions();
         if (granted) {
-          recordSuccess = await _waterTracking.recordWaterIntake(milliliters: milliliters);
+          // === 【修改】将解析后的时间传递给记录方法 ===
+          recordSuccess = await _waterTracking.recordWaterIntake(
+            milliliters: milliliters,
+            timestamp: drinkTime,
+          );
         }
       }
 
