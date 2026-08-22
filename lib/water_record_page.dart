@@ -216,13 +216,13 @@ class _WaterRecordPageState extends State<WaterRecordPage> {
                         Text(
                           success ? 'Sucecessfully recorded ${milliliters.toInt()} ml！' : 'Recording failed',
                         ),
-                        backgroundImage: widget.backgroundImage,
+                        backgroundImage: widget.snapshotImage,
                       );
                       setState((){_initHealthData();});
                     }
                   } else {
                     if (context.mounted) {
-                      showLiquidGlassSnackBar(context, Text('Incorrect number'), backgroundImage: widget.backgroundImage);
+                      showLiquidGlassSnackBar(context, Text('Incorrect number'), backgroundImage: widget.snapshotImage);
                     }
                   }
                 },
