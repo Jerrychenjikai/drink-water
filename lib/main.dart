@@ -167,11 +167,14 @@ class _HomePageState extends State<HomePage> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        showLiquidGlassSnackBar(context, Text(
+        showLiquidGlassSnackBar(
+          context: context, 
+          content: Text(
             milliliters != null 
               ? '收到蓝牙消息: $message\n自动同步健康数据: ${recordSuccess ? "成功" : "失败"}'
               : '收到蓝牙消息: $message'
           ),
+          backgroundKey: _homepageKey,
         );
       }
     } catch (e) {

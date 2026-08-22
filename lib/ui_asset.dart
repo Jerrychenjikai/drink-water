@@ -7,58 +7,51 @@ import 'ui_basic.dart';
 // ==========================================
 // 新增：液态玻璃 SnackBar
 // ==========================================
-void showLiquidGlassSnackBar(BuildContext context, Widget content, {ui.Image? backgroundImage}) {
-  final messenger = ScaffoldMessenger.of(context);
+Future<void> showLiquidGlassSnackBar({
+  required BuildContext context,
+  required GlobalKey backgroundKey,
+  required Widget content,
+  double height = 80,
+  double borderRadius = 16,
+  double refractionIntensity = 7,
+  double edgeMargin = 20,
+}) async {
+  // 1. 直接截取背景图
+  final rawImage = await captureBackground(context, backgroundKey);
+  if (rawImage == null) return;
 
-  final snackBar = SnackBar(
-    backgroundColor: Colors.transparent, // 背景完全透明
-    elevation: 0,                        // 无阴影
-    shape: const RoundedRectangleBorder(
-      side: BorderSide.none,             // 去掉系统边框
-      borderRadius: BorderRadius.all(Radius.circular(16)),
-    ),
-    behavior: SnackBarBehavior.floating,
-    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    content: Builder(
-      builder: (innerContext) {
-        // 关键：在 SnackBar 真正 Build 时，使用它内部的 innerContext 向上查找 Scope
-        final scopeData = LiquidGlassScope.of(innerContext);
-        final bgImage = backgroundImage ?? scopeData?.backgroundImage;
-        final bgSize = scopeData?.bgSize;
-
-        if (bgImage != null && bgSize != null) {
-          // 有玻璃纹理 → 使用真正的 LiquidGlassContainer
-          return SizedBox(
-            height: 80,
-            child: LiquidGlassContainer(
-              width: double.infinity,
-              height: double.infinity,
-              borderRadius: 16,
-              backgroundImage: bgImage,
-              bgSize: bgSize,
-              refractionIntensity: 7,
-              edgeMargin: 20,
-              child: Center(child: content),
-            ),
-          );
-        } else {
-          // 无纹理 → 回退到轻量半透明样式
-          return Container(
-            height: 80,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.5),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.transparent, width: 0),
-            ),
-            child: Center(child: content),
-          );
-        }
-      },
-    ),
+  // 2. 预处理高斯模糊[cite: 1]
+  final snapshotImage = await processSnapshotImage(
+    rawImage,
+    config: const SnapshotConfig(blurSigma: 16.0, darkenOpacity: 0.05),
   );
 
-  messenger.showSnackBar(snackBar);
+  if (!context.mounted) return;
+
+  final screenSize = MediaQuery.sizeOf(context);
+
+  // 3. 弹出毛玻璃 SnackBar[cite: 1]
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      behavior: SnackBarBehavior.floating,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      content: SizedBox(
+        height: height,
+        child: LiquidGlassContainer(
+          width: double.infinity,
+          height: double.infinity,
+          borderRadius: borderRadius,
+          backgroundImage: snapshotImage,
+          bgSize: screenSize,
+          refractionIntensity: refractionIntensity,
+          edgeMargin: edgeMargin,
+          child: Center(child: content),
+        ),
+      ),
+    ),
+  );
 }
 
 

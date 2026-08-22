@@ -77,9 +77,9 @@ class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
 
     if (mounted) {
       showLiquidGlassSnackBar(
-        context, 
-        Text('已绑定设备: ${device.name} (${device.devicePath})'),
-        backgroundImage: widget.snapshotImage,
+        context: context, 
+        content: Text('已绑定设备: ${device.name} (${device.devicePath})'),
+        backgroundKey: _backgroundKey
       );
     }
   }
