@@ -183,6 +183,10 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return LiquidGlassScope(
       painter: GradientBackgroundPainter(),
+      snapshotConfig: const SnapshotConfig(
+        blurSigma: 8.0,       // 模糊程度：数值越小，背景图案越清晰
+        darkenOpacity: 0.05,  // 暗度调节（保持默认即可）
+      ),
       child: Scaffold(
         resizeToAvoidBottomInset: false,
         body: RepaintBoundary(

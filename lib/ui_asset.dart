@@ -263,8 +263,8 @@ class WaterBarChart extends StatelessWidget {
               decoration: BoxDecoration(
                 // 达标用主界面的深蓝色 (blue.shade800)，未达标用白色半透明 (white.withOpacity(0.5)) 突出视觉层次
                 color: amount >= targetWater
-                    ? Colors.blue.shade800
-                    : Colors.white.withOpacity(0.55),
+                    ? Colors.blue.shade900
+                    : Colors.blue.shade800,
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
