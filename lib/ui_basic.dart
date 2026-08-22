@@ -4,6 +4,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 // ==========================================
+// 图像处理配置类
+// ==========================================
+class SnapshotConfig {
+  final double blurSigma;
+  final double darkenOpacity;
+
+  const SnapshotConfig({
+    this.blurSigma = 4.0,
+    this.darkenOpacity = 0.25,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SnapshotConfig &&
+          runtimeType == other.runtimeType &&
+          blurSigma == other.blurSigma &&
+          darkenOpacity == other.darkenOpacity;
+
+  @override
+  int get hashCode => blurSigma.hashCode ^ darkenOpacity.hashCode;
+}
+
+// ==========================================
 // 全局 Shader 预加载
 // ==========================================
 ui.FragmentShader? _globalRefractionShader;
@@ -20,8 +44,7 @@ Future<void> preloadLiquidGlassShader({String assetPath = 'shaders/refraction.fr
 
 Future<ui.Image> processSnapshotImage(
   ui.Image inputImage, {
-  double blurSigma = 4.0,
-  double darkenOpacity = 0.25,
+  SnapshotConfig config = const SnapshotConfig(),
 }) async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(
@@ -32,12 +55,12 @@ Future<ui.Image> processSnapshotImage(
   // 配置画笔：高斯模糊 + 黑色混合模式（降亮度）
   final paint = Paint()
     ..imageFilter = ui.ImageFilter.blur(
-      sigmaX: blurSigma,
-      sigmaY: blurSigma,
+      sigmaX: config.blurSigma,
+      sigmaY: config.blurSigma,
       tileMode: TileMode.clamp, // 避免边缘模糊白边
     )
     ..colorFilter = ColorFilter.mode(
-      Colors.black.withOpacity(darkenOpacity),
+      Colors.black.withOpacity(config.darkenOpacity),
       BlendMode.lighten,
     );
 
@@ -55,11 +78,17 @@ Future<ui.Image> processSnapshotImage(
 class LiquidGlassScope extends StatefulWidget {
   final CustomPainter painter;
   final Widget child;
+  
+  // 新增：是否模糊以及模糊参数配置
+  final bool blur;
+  final SnapshotConfig snapshotConfig;
 
   const LiquidGlassScope({
     super.key,
     required this.painter,
     required this.child,
+    this.blur = false,
+    this.snapshotConfig = const SnapshotConfig(),
   });
 
   /// 供子组件获取背景纹理和尺寸数据
@@ -78,8 +107,11 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
   @override
   void didUpdateWidget(covariant LiquidGlassScope oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 当 Painter（如背景主题）发生改变时自动刷新纹理
-    if (oldWidget.painter != widget.painter && _lastSize != Size.zero) {
+    // 当 Painter（如背景主题）发生改变，或者模糊配置发生改变时自动刷新纹理
+    if ((oldWidget.painter != widget.painter || 
+         oldWidget.blur != widget.blur || 
+         oldWidget.snapshotConfig != widget.snapshotConfig) && 
+        _lastSize != Size.zero) {
       _generateTexture(_lastSize);
     }
   }
@@ -101,14 +133,21 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
     
     final picture = recorder.endRecording();
     final newImage = await picture.toImage(size.width.toInt(), size.height.toInt());
+    
+    ui.Image finalImage = newImage;
+    // 如果启用了 blur，则调用图像处理函数
+    if (widget.blur) {
+      finalImage = await processSnapshotImage(newImage, config: widget.snapshotConfig);
+      newImage.dispose(); // 释放未模糊的原始图像显存
+    }
 
     if (mounted) {
       setState(() {
         _bgImage?.dispose(); // 释放旧显存
-        _bgImage = newImage;
+        _bgImage = finalImage;
       });
     } else {
-      newImage.dispose();
+      finalImage.dispose();
     }
   }
 
@@ -309,11 +348,16 @@ Future<T?> showLiquidGlassPopup<T>({
   }
 
   final origImage = await captureBackground(context, backgroundKey);
+  
+  // 修改处：使用新的 SnapshotConfig 传参
   final snapshotImage = origImage == null ? null : await processSnapshotImage(
       origImage,
-      blurSigma: 16.0,      // 模糊程度
-      darkenOpacity: 0.05,  // 变暗程度
+      config: const SnapshotConfig(
+        blurSigma: 16.0,      // 模糊程度
+        darkenOpacity: 0.05,  // 变暗程度
+      ),
     );
+    
   final screenSize = MediaQuery.sizeOf(context);
 
   if (!context.mounted) return null;

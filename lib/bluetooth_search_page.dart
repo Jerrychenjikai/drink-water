@@ -76,11 +76,9 @@ class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
     });
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已绑定设备: ${device.name} (${device.devicePath})'),
-          behavior: SnackBarBehavior.floating,
-        ),
+      showLiquidGlassSnackBar(
+        context, 
+        Text('已绑定设备: ${device.name} (${device.devicePath})'),
       );
     }
   }

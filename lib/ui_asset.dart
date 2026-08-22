@@ -3,6 +3,27 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+void showLiquidGlassSnackBar(BuildContext context, Widget content) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      backgroundColor: Colors.transparent, // 必须透明
+      elevation: 0,
+      behavior: SnackBarBehavior.floating, // 必须设为 floating 才能自定义
+      padding: EdgeInsets.zero, // 移除默认填充
+      margin: const EdgeInsets.all(16), // 底部边距
+      content: LiquidGlassContainer(
+        borderRadius: 16, // 可根据需要调整
+        edgeMargin: 0,    // 设置为0以贴合容器
+        blur: true,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: content,
+        ),
+      ),
+    ),
+  );
+}
+
 /// 提取出的通用 Elevated Button 构建函数
 Widget liquidButton({
   required Widget child,
