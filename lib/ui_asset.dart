@@ -15,56 +15,53 @@ import 'ui_basic.dart';
 /// 避免截图开销，同时保持视觉一致性。
 void showLiquidGlassSnackBar(BuildContext context, Widget content) {
   final messenger = ScaffoldMessenger.of(context);
-  final scopeData = LiquidGlassScope.of(context);
-
-  // 尝试从 Scope 获取共享背景纹理
-  final bgImage = scopeData?.backgroundImage;
-  final bgSize = scopeData?.bgSize;
-
-  // 构建 SnackBar 的内容 Widget（容器）
-  Widget buildContainer() {
-    if (bgImage != null && bgSize != null) {
-      // 有玻璃纹理 → 使用真正的 LiquidGlassContainer
-      return SizedBox(
-        height: 80, // 固定高度，与常规 SnackBar 一致
-        child: LiquidGlassContainer(
-          width: double.infinity,
-          height: double.infinity,
-          borderRadius: 16,
-          backgroundImage: bgImage,
-          bgSize: bgSize,
-          refractionIntensity: 7,
-          edgeMargin: 20,
-          child: Center(child: content),
-        ),
-      );
-    } else {
-      // 无纹理 → 回退到轻量半透明样式（无边框）
-      return Container(
-        height: 80,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.5),
-          borderRadius: BorderRadius.circular(16),
-          // 明确去掉任何边框
-          border: Border.all(color: Colors.transparent, width: 0),
-          boxShadow: null, // 无阴影，保持扁平
-        ),
-        child: Center(child: content),
-      );
-    }
-  }
 
   final snackBar = SnackBar(
-    backgroundColor: Colors.transparent,          // 背景完全透明
-    elevation: 0,                                 // 无阴影
+    backgroundColor: Colors.transparent, // 背景完全透明
+    elevation: 0,                        // 无阴影
     shape: const RoundedRectangleBorder(
-      side: BorderSide.none,                      // 去掉系统边框
+      side: BorderSide.none,             // 去掉系统边框
       borderRadius: BorderRadius.all(Radius.circular(16)),
     ),
     behavior: SnackBarBehavior.floating,
     margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    content: buildContainer(),
+    content: Builder(
+      builder: (innerContext) {
+        // 关键：在 SnackBar 真正 Build 时，使用它内部的 innerContext 向上查找 Scope
+        final scopeData = LiquidGlassScope.of(innerContext);
+        final bgImage = scopeData?.backgroundImage;
+        final bgSize = scopeData?.bgSize;
+
+        if (bgImage != null && bgSize != null) {
+          // 有玻璃纹理 → 使用真正的 LiquidGlassContainer
+          return SizedBox(
+            height: 80,
+            child: LiquidGlassContainer(
+              width: double.infinity,
+              height: double.infinity,
+              borderRadius: 16,
+              backgroundImage: bgImage,
+              bgSize: bgSize,
+              refractionIntensity: 7,
+              edgeMargin: 20,
+              child: Center(child: content),
+            ),
+          );
+        } else {
+          // 无纹理 → 回退到轻量半透明样式
+          return Container(
+            height: 80,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.5),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.transparent, width: 0),
+            ),
+            child: Center(child: content),
+          );
+        }
+      },
+    ),
   );
 
   messenger.showSnackBar(snackBar);
@@ -113,12 +110,13 @@ class WaterRingProgress extends StatelessWidget {
     
     final bool isGoalReached = currentWater >= targetWater;
 
-    // 保持与 WaterBarChart 一致的配色逻辑
+    // 修改：使用主界面蓝牙已连接的深蓝色 (shade800/shade900)，提升在蓝水背景上的对比度
     final Color progressColor = isGoalReached
-        ? Colors.blueAccent
-        : Colors.blueAccent.withOpacity(0.5);
+        ? Colors.blue.shade900
+        : Colors.blue.shade800;
 
-    final Color trackColor = Colors.blueAccent.withOpacity(0.12);
+    // 轨道采用白色半透明，在深色水背景上依然清晰可见
+    final Color trackColor = Colors.white.withOpacity(0.35);
 
     return Tooltip(
       message: '${currentWater.toStringAsFixed(0)} / ${targetWater.toStringAsFixed(0)} ml',
@@ -147,15 +145,15 @@ class WaterRingProgress extends StatelessWidget {
                   style: TextStyle(
                     fontSize: size * 0.2,
                     fontWeight: FontWeight.bold,
-                    color: Colors.blueAccent,
+                    color: Colors.blue.shade900, // 调整为深蓝色
                   ),
                 ),
                 Text(
                   '/ ${targetWater.toStringAsFixed(0)} ml',
                   style: TextStyle(
                     fontSize: size * 0.09,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
+                    color: Colors.blue.shade800.withOpacity(0.8), // 调整为深蓝色系
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -263,9 +261,10 @@ class WaterBarChart extends StatelessWidget {
               width: 24,
               height: barHeight,
               decoration: BoxDecoration(
+                // 达标用主界面的深蓝色 (blue.shade800)，未达标用白色半透明 (white.withOpacity(0.5)) 突出视觉层次
                 color: amount >= targetWater
-                    ? Colors.blueAccent
-                    : Colors.blueAccent.withOpacity(0.5),
+                    ? Colors.blue.shade800
+                    : Colors.white.withOpacity(0.55),
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
