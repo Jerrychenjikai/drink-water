@@ -171,8 +171,8 @@ class _HomePageState extends State<HomePage> {
           context: context, 
           content: Text(
             milliliters != null 
-              ? '收到蓝牙消息: $message\n自动同步健康数据: ${recordSuccess ? "成功" : "失败"}'
-              : '收到蓝牙消息: $message'
+              ? 'Bluetooth msg: $message\nsync to health app: ${recordSuccess ? "success" : "fail"}'
+              : 'Bluetooth msg: $message'
           ),
           backgroundKey: _homepageKey,
         );
@@ -228,8 +228,8 @@ class _HomePageState extends State<HomePage> {
                                   
                                   Text(
                                     _isConnecting 
-                                        ? "正在连接设备..." 
-                                        : (_isConnected ? "已成功连接" : "未连接设备"),
+                                        ? "Connecting" 
+                                        : (_isConnected ? "Connected" : "Disconnected"),
                                     style: TextStyle(
                                       fontSize: 24,
                                       fontWeight: FontWeight.bold,
@@ -238,11 +238,11 @@ class _HomePageState extends State<HomePage> {
                                   ),
                                   const SizedBox(height: 48),
                                   
-                                  if (!_isConnected)
+                                  if (!_isConnected && !_isConnecting)
                                     liquidButton(
                                       onPressed: _tryConnect,
                                       child: Text(
-                                        _isConnecting ? "连接中..." : "再次尝试连接",
+                                        "Connect",
                                         style: const TextStyle(
                                           fontSize: 18,
                                           color: Colors.black87,
@@ -266,7 +266,7 @@ class _HomePageState extends State<HomePage> {
                                 onPressed: () {
                                   WaterRecordPage.push(context, _homepageKey);
                                 },
-                                child: const Text("喝水记录页", textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.bold)),
+                                child: const Text("Hydration", textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.bold)),
                               ),
                             ),
                             const SizedBox(width: 12),
@@ -276,7 +276,7 @@ class _HomePageState extends State<HomePage> {
                                   await BluetoothSearchPage.push(context, _homepageKey);
                                   _tryConnect();
                                 },
-                                child: const Text("蓝牙配对页", textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.bold)),
+                                child: const Text("Bluetooth Pairing", textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, color: Colors.black87, fontWeight: FontWeight.bold)),
                               ),
                             ),
                           ],
