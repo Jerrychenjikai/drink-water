@@ -171,7 +171,7 @@ class _WaterRecordPageState extends State<WaterRecordPage> {
       context: context,
       backgroundKey: _backgroundKey,
       width: 280,
-      height: 220,
+      height: 160,
       borderRadius: 24.0,
       child: Padding(
         padding: const EdgeInsets.all(16.0),

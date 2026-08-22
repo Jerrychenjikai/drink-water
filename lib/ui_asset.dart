@@ -24,6 +24,11 @@ void showLiquidGlassSnackBar(BuildContext context, Widget content) {
   );
 }
 
+/* 
+Refusing to display OTP completion list relative to null rect. positioningView:<FlutterTextInputView: 0x13f109ca0; frame = (0 0; 208 24); text = ''; tintColor = UIExtendedGrayColorSpace 0 0; gestureRecognizers = <NSArray: 0x6000031b5200>; layer = <CALayer: 0x600003f3c640>>
+*/
+
+
 /// 提取出的通用 Elevated Button 构建函数
 Widget liquidButton({
   required Widget child,
