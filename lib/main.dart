@@ -287,7 +287,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-class GradientBackgroundPainter extends CustomPainter {
+/*class GradientBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
@@ -305,6 +305,46 @@ class GradientBackgroundPainter extends CustomPainter {
         stops: [0.0, 0.25, 0.45, 0.75, 1.0],
       ).createShader(rect);
     canvas.drawRect(rect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}*/
+
+class GradientBackgroundPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final paint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color.fromARGB(255, 1, 145, 255),
+          Color(0xFF00C9FF), 
+          Color(0xFF00F2FE), 
+          Color.fromARGB(255, 141, 252, 153), 
+          Color.fromARGB(255, 0, 255, 115),
+        ],
+        stops: [0.0, 0.25, 0.45, 0.75, 1.0],
+      ).createShader(rect);
+
+    // 绘制三角形（锐角）
+    final triangle = Path()
+      ..moveTo(size.width * 0.2, size.height * 0.1)
+      ..lineTo(size.width * 0.1, size.height * 0.9)
+      ..lineTo(size.width * 0.5, size.height * 0.9)
+      ..close();
+    canvas.drawPath(triangle, paint);
+
+    // 绘制菱形（四个棱角）
+    final diamond = Path()
+      ..moveTo(size.width * 0.7, size.height * 0.2)
+      ..lineTo(size.width * 0.9, size.height * 0.5)
+      ..lineTo(size.width * 0.7, size.height * 0.8)
+      ..lineTo(size.width * 0.5, size.height * 0.5)
+      ..close();
+    canvas.drawPath(diamond, paint);
   }
 
   @override
