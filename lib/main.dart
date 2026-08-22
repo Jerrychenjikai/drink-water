@@ -304,23 +304,7 @@ class GradientBackgroundPainter extends CustomPainter {
         ],
         stops: [0.0, 0.25, 0.45, 0.75, 1.0],
       ).createShader(rect);
-
-    // 绘制三角形（锐角）
-    final triangle = Path()
-      ..moveTo(size.width * 0.2, size.height * 0.1)
-      ..lineTo(size.width * 0.1, size.height * 0.9)
-      ..lineTo(size.width * 0.5, size.height * 0.9)
-      ..close();
-    canvas.drawPath(triangle, paint);
-
-    // 绘制菱形（四个棱角）
-    final diamond = Path()
-      ..moveTo(size.width * 0.7, size.height * 0.2)
-      ..lineTo(size.width * 0.9, size.height * 0.5)
-      ..lineTo(size.width * 0.7, size.height * 0.8)
-      ..lineTo(size.width * 0.5, size.height * 0.5)
-      ..close();
-    canvas.drawPath(diamond, paint);
+    canvas.drawRect(rect, paint);
   }
 
   @override
