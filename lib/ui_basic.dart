@@ -12,7 +12,7 @@ class SnapshotConfig {
 
   const SnapshotConfig({
     this.blurSigma = 16.0,
-    this.darkenOpacity = 0.25,
+    this.darkenOpacity = 0.05,
   });
 
   @override
