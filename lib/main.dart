@@ -294,6 +294,8 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+import 'package:flutter/material.dart';
+
 class GradientBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -347,37 +349,68 @@ class GradientBackgroundPainter extends CustomPainter {
     canvas.drawPath(frontWavePath, waterPaint);
 
     // ==========================================
-    // 3. 绘制卡通气泡（实心 + 浅蓝高光点）
+    // 3. 绘制卡通气泡（实心浅蓝 + 白色高光点）
     // ==========================================
-    // 实心半透明白色气泡主体
+    // 实心半透明浅蓝色气泡主体（模拟水下通透感）
     final bubblePaint = Paint()
-      ..color = Colors.white.withOpacity(0.75)
+      ..color = const Color(0xFFB3E5FC).withOpacity(0.55) 
       ..style = PaintingStyle.fill;
 
-    // 浅蓝色高光点 Paint
+    // 纯白色高光点 Paint，提升立体感
     final highlightPaint = Paint()
-      ..color = const Color(0xFF81D4FA) // 柔和的浅蓝色高光
+      ..color = Colors.white.withOpacity(0.9)
       ..style = PaintingStyle.fill;
 
-    // 辅助函数：画带浅蓝高光的实心气泡
+    // 辅助函数：画带白色高光的实心气泡
     void drawBubble(Offset center, double radius) {
-      // 1. 绘制实心白气泡
+      // 1. 绘制实心浅蓝气泡
       canvas.drawCircle(center, radius, bubblePaint);
 
-      // 2. 在气泡左上角绘制浅蓝色高光点
+      // 2. 在气泡左上角绘制白色高光点
       canvas.drawCircle(
         Offset(center.dx - radius * 0.35, center.dy - radius * 0.35),
-        radius * 0.28,
+        radius * 0.25, // 高光点大小等比例缩放
         highlightPaint,
       );
     }
 
-    // 气泡分布绘制
-    drawBubble(Offset(size.width * 0.25, size.height * 0.4), size.width * 0.025);
-    drawBubble(Offset(size.width * 0.65, size.height * 0.55), size.width * 0.04);
-    drawBubble(Offset(size.width * 0.35, size.height * 0.75), size.width * 0.035);
-    drawBubble(Offset(size.width * 0.8, size.height * 0.85), size.width * 0.03);
-    drawBubble(Offset(size.width * 0.15, size.height * 0.9), size.width * 0.02);
+    // 定义气泡数据：[x坐标比例, y坐标比例, 半径比例]
+    // 参考了提供的图片，采用"大带小"的聚落式分布，避免均匀排列显得死板
+    final bubbleData = [
+      // 左上群落
+      [0.28, 0.38, 0.05],
+      [0.38, 0.40, 0.025],
+      
+      // 右上群落
+      [0.75, 0.35, 0.045],
+      [0.66, 0.31, 0.02],
+      
+      // 核心区域（居中偏大）
+      [0.45, 0.55, 0.075],
+      [0.58, 0.48, 0.035],
+      
+      // 左下群落
+      [0.32, 0.68, 0.065],
+      [0.42, 0.72, 0.025],
+      [0.25, 0.78, 0.035],
+      
+      // 右下群落
+      [0.78, 0.65, 0.055],
+      [0.68, 0.72, 0.025],
+      [0.85, 0.82, 0.03],
+      
+      // 底部零星点缀
+      [0.55, 0.88, 0.04],
+      [0.18, 0.90, 0.025],
+    ];
+
+    // 遍历绘制所有气泡
+    for (final data in bubbleData) {
+      final dx = size.width * data[0];
+      final dy = size.height * data[1];
+      final radius = size.width * data[2];
+      drawBubble(Offset(dx, dy), radius);
+    }
   }
 
   @override
