@@ -4,29 +4,116 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'ui_basic.dart';
 
+// ==========================================
+// 新增：液态玻璃 SnackBar
+// ==========================================
+
+/// 显示一个具有液态玻璃质感的 SnackBar，无任何边框。
+/// 
+/// 自动从 [LiquidGlassScope] 获取背景纹理；若不存在，则截取当前屏幕并实时处理。
+/// SnackBar 高度固定为 80，内容居中显示，支持自定义内容。
 void showLiquidGlassSnackBar(BuildContext context, Widget content) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      backgroundColor: Colors.transparent, // 必须透明
-      elevation: 0,
-      behavior: SnackBarBehavior.floating, // 必须设为 floating 才能自定义
-      padding: EdgeInsets.zero, // 移除默认填充
-      margin: const EdgeInsets.all(16), // 底部边距
-      content: LiquidGlassContainer(
-        borderRadius: 16, // 可根据需要调整
-        edgeMargin: 0,    // 设置为0以贴合容器
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: content,
-        ),
+  final messenger = ScaffoldMessenger.of(context);
+  final scopeData = LiquidGlassScope.of(context);
+
+  // 优先使用 Scope 中已生成的背景纹理（同步）
+  if (scopeData?.backgroundImage != null && scopeData?.bgSize != null) {
+    _showSnackBarWithImage(
+      messenger,
+      context,
+      content,
+      scopeData!.backgroundImage!,
+      scopeData.bgSize,
+      disposeImage: false, // Scope 管理生命周期
+    );
+  } else {
+    // 否则异步截屏并处理（适用于未包裹 LiquidGlassScope 的情况）
+    _captureAndShowSnackBar(messenger, context, content);
+  }
+}
+
+/// 异步截取当前屏幕，处理后显示 SnackBar
+Future<void> _captureAndShowSnackBar(
+  ScaffoldMessengerState messenger,
+  BuildContext context,
+  Widget content,
+) async {
+  try {
+    // 截取整个屏幕
+    final renderView = WidgetsBinding.instance.renderView;
+    final pixelRatio = View.of(context).devicePixelRatio;
+    final rawImage = await renderView.toImage(pixelRatio: pixelRatio);
+
+    // 应用模糊 + 变暗处理（使用默认配置）
+    final processedImage = await processSnapshotImage(
+      rawImage,
+      config: const SnapshotConfig(),
+    );
+    // 释放原始图像（processSnapshotImage 内部会复制，原始需手动释放）
+    rawImage.dispose();
+
+    if (!messenger.mounted) {
+      processedImage.dispose();
+      return;
+    }
+
+    final screenSize = MediaQuery.sizeOf(context);
+    _showSnackBarWithImage(
+      messenger,
+      context,
+      content,
+      processedImage,
+      screenSize,
+      disposeImage: true, // 由本函数创建的图像，需在 SnackBar 关闭后释放
+    );
+  } catch (e) {
+    // 发生异常时降级为普通 SnackBar
+    debugPrint('LiquidGlass SnackBar 截图失败，回退到普通 SnackBar: $e');
+    messenger.showSnackBar(SnackBar(content: content));
+  }
+}
+
+/// 使用给定的背景图像构建并显示 SnackBar
+void _showSnackBarWithImage(
+  ScaffoldMessengerState messenger,
+  BuildContext context,
+  Widget content,
+  ui.Image bgImage,
+  Size bgSize, {
+  bool disposeImage = false,
+}) {
+  // 构建 SnackBar，完全透明背景，无边框无阴影
+  final snackBar = SnackBar(
+    backgroundColor: Colors.transparent,
+    elevation: 0,
+    shape: const RoundedRectangleBorder(
+      side: BorderSide.none, // 去掉边框
+      borderRadius: BorderRadius.all(Radius.circular(16)),
+    ),
+    behavior: SnackBarBehavior.floating,
+    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    content: SizedBox(
+      height: 80, // 固定高度，匹配常见 SnackBar
+      child: LiquidGlassContainer(
+        width: double.infinity,
+        height: double.infinity, // 由父 SizedBox 约束
+        borderRadius: 16,
+        backgroundImage: bgImage,
+        bgSize: bgSize,
+        refractionIntensity: 7,
+        edgeMargin: 20,
+        child: Center(child: content), // 内容居中
       ),
     ),
   );
-}
 
-/* 
-Refusing to display OTP completion list relative to null rect. positioningView:<FlutterTextInputView: 0x13f109ca0; frame = (0 0; 208 24); text = ''; tintColor = UIExtendedGrayColorSpace 0 0; gestureRecognizers = <NSArray: 0x6000031b5200>; layer = <CALayer: 0x600003f3c640>>
-*/
+  final controller = messenger.showSnackBar(snackBar);
+
+  // 若图像为本函数创建，则在 SnackBar 关闭后释放显存
+  if (disposeImage) {
+    controller.closed.then((_) => bgImage.dispose());
+  }
+}
 
 
 /// 提取出的通用 Elevated Button 构建函数
