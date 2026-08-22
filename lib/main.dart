@@ -287,64 +287,87 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/*class GradientBackgroundPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final paint = Paint()
-      ..shader = const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          Color.fromARGB(255, 1, 145, 255),
-          Color(0xFF00C9FF), 
-          Color(0xFF00F2FE), 
-          Color.fromARGB(255, 141, 252, 153), 
-          Color.fromARGB(255, 0, 255, 115),
-        ],
-        stops: [0.0, 0.25, 0.45, 0.75, 1.0],
-      ).createShader(rect);
-    canvas.drawRect(rect, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}*/
-
 class GradientBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final paint = Paint()
+    // ==========================================
+    // 1. 修复透明模糊 Bug：铺满不透明的白色底
+    // ==========================================
+    final bgRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final bgPaint = Paint()..color = Colors.white;
+    canvas.drawRect(bgRect, bgPaint);
+
+    // ==========================================
+    // 2. 绘制 80% 的水和波浪线
+    // ==========================================
+    final waterTop = size.height * 0.2; // 顶部留白 20%
+    final waveHeight = size.height * 0.02; // 波浪起伏幅度
+    final waveWidth = size.width / 2; // 单个波浪的宽度
+
+    // --- 后层波浪 (浅色，增加层次感) ---
+    final backWavePath = Path()
+      ..moveTo(0, waterTop + waveHeight)
+      ..quadraticBezierTo(waveWidth * 0.5, waterTop + waveHeight * 2.5, waveWidth, waterTop + waveHeight)
+      ..quadraticBezierTo(waveWidth * 1.5, waterTop - waveHeight * 0.5, size.width, waterTop + waveHeight)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    final backWavePaint = Paint()
+      ..color = const Color(0xFF81D4FA).withOpacity(0.6); // 极浅的蓝
+    canvas.drawPath(backWavePath, backWavePaint);
+
+    // --- 前层波浪 (主水体) ---
+    final frontWavePath = Path()
+      ..moveTo(0, waterTop)
+      ..quadraticBezierTo(waveWidth * 0.5, waterTop - waveHeight * 1.5, waveWidth, waterTop)
+      ..quadraticBezierTo(waveWidth * 1.5, waterTop + waveHeight * 1.5, size.width, waterTop)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    // 模拟水的深浅渐变
+    final waterPaint = Paint()
       ..shader = const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
         colors: [
-          Color.fromARGB(255, 1, 145, 255),
-          Color(0xFF00C9FF), 
-          Color(0xFF00F2FE), 
-          Color.fromARGB(255, 141, 252, 153), 
-          Color.fromARGB(255, 0, 255, 115),
+          Color(0xFF29B6F6), // 较浅的蓝
+          Color(0xFF0277BD), // 较深的蓝
         ],
-        stops: [0.0, 0.25, 0.45, 0.75, 1.0],
-      ).createShader(rect);
+      ).createShader(Rect.fromLTWH(0, waterTop, size.width, size.height - waterTop));
+      
+    canvas.drawPath(frontWavePath, waterPaint);
 
-    // 绘制三角形（锐角）
-    final triangle = Path()
-      ..moveTo(size.width * 0.2, size.height * 0.1)
-      ..lineTo(size.width * 0.1, size.height * 0.9)
-      ..lineTo(size.width * 0.5, size.height * 0.9)
-      ..close();
-    canvas.drawPath(triangle, paint);
+    // ==========================================
+    // 3. 绘制卡通气泡
+    // ==========================================
+    final bubblePaint = Paint()
+      ..color = Colors.white.withOpacity(0.7)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
 
-    // 绘制菱形（四个棱角）
-    final diamond = Path()
-      ..moveTo(size.width * 0.7, size.height * 0.2)
-      ..lineTo(size.width * 0.9, size.height * 0.5)
-      ..lineTo(size.width * 0.7, size.height * 0.8)
-      ..lineTo(size.width * 0.5, size.height * 0.5)
-      ..close();
-    canvas.drawPath(diamond, paint);
+    final highlightPaint = Paint()
+      ..color = Colors.white.withOpacity(0.9)
+      ..style = PaintingStyle.fill;
+
+    // 辅助函数：画带高光的气泡
+    void drawBubble(Offset center, double radius) {
+      canvas.drawCircle(center, radius, bubblePaint);
+      // 在气泡左上角画一个小圆点作为高光，增加立体和卡通感
+      canvas.drawCircle(
+        Offset(center.dx - radius * 0.4, center.dy - radius * 0.4),
+        radius * 0.2,
+        highlightPaint,
+      );
+    }
+
+    // 照着你的草图，在水下随机分布几个大小不一的气泡
+    drawBubble(Offset(size.width * 0.25, size.height * 0.4), size.width * 0.025);
+    drawBubble(Offset(size.width * 0.65, size.height * 0.55), size.width * 0.04);
+    drawBubble(Offset(size.width * 0.35, size.height * 0.75), size.width * 0.035);
+    drawBubble(Offset(size.width * 0.8, size.height * 0.85), size.width * 0.03);
+    drawBubble(Offset(size.width * 0.15, size.height * 0.9), size.width * 0.02);
   }
 
   @override
