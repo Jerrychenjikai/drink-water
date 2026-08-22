@@ -118,7 +118,7 @@ class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
           const SizedBox(height: 8),
           Text(
             "Current MAC: $_savedMacAddress",
-            style: const TextStyle(fontSize: 14, color: Colors.black54),
+            style: const TextStyle(fontSize: 14, color: Colors.black),
           ),
         ],
         const SizedBox(height: 32),
@@ -154,7 +154,7 @@ class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
                           child: Text(
                             "No devices found.\nTap scan to search.",
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.black54),
+                            style: TextStyle(color: Colors.black),
                           ),
                         )
                       : ListView.separated(
@@ -170,7 +170,7 @@ class _BluetoothSearchPageState extends State<BluetoothSearchPage> {
                               title: Text(
                                 device.name,
                                 style: TextStyle(
-                                  color: isSelected ? Colors.blue.shade800 : Colors.black87,
+                                  color: isSelected ? Colors.blue.shade800 : Colors.black,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),

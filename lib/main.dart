@@ -295,7 +295,7 @@ class GradientBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // ==========================================
-    // 1. 修复透明模糊 Bug：铺满不透明的白色底
+    // 1. 铺满不透明的白色底
     // ==========================================
     final bgRect = Rect.fromLTWH(0, 0, size.width, size.height);
     final bgPaint = Paint()..color = Colors.white;
