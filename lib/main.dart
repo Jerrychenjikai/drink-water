@@ -184,7 +184,7 @@ class _HomePageState extends State<HomePage> {
     return LiquidGlassScope(
       painter: GradientBackgroundPainter(),
       snapshotConfig: const SnapshotConfig(
-        blurSigma: 8.0,       // 模糊程度：数值越小，背景图案越清晰
+        blurSigma: 4.0,       // 模糊程度：数值越小，背景图案越清晰
         darkenOpacity: 0.05,  // 暗度调节（保持默认即可）
       ),
       child: Scaffold(
@@ -344,29 +344,32 @@ class GradientBackgroundPainter extends CustomPainter {
     canvas.drawPath(frontWavePath, waterPaint);
 
     // ==========================================
-    // 3. 绘制卡通气泡
+    // 3. 绘制卡通气泡（实心 + 浅蓝高光点）
     // ==========================================
+    // 实心半透明白色气泡主体
     final bubblePaint = Paint()
-      ..color = Colors.white.withOpacity(0.7)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
-
-    final highlightPaint = Paint()
-      ..color = Colors.white.withOpacity(0.9)
+      ..color = Colors.white.withOpacity(0.75)
       ..style = PaintingStyle.fill;
 
-    // 辅助函数：画带高光的气泡
+    // 浅蓝色高光点 Paint
+    final highlightPaint = Paint()
+      ..color = const Color(0xFF81D4FA) // 柔和的浅蓝色高光
+      ..style = PaintingStyle.fill;
+
+    // 辅助函数：画带浅蓝高光的实心气泡
     void drawBubble(Offset center, double radius) {
+      // 1. 绘制实心白气泡
       canvas.drawCircle(center, radius, bubblePaint);
-      // 在气泡左上角画一个小圆点作为高光，增加立体和卡通感
+
+      // 2. 在气泡左上角绘制浅蓝色高光点
       canvas.drawCircle(
-        Offset(center.dx - radius * 0.4, center.dy - radius * 0.4),
-        radius * 0.2,
+        Offset(center.dx - radius * 0.35, center.dy - radius * 0.35),
+        radius * 0.28,
         highlightPaint,
       );
     }
 
-    // 照着你的草图，在水下随机分布几个大小不一的气泡
+    // 气泡分布绘制
     drawBubble(Offset(size.width * 0.25, size.height * 0.4), size.width * 0.025);
     drawBubble(Offset(size.width * 0.65, size.height * 0.55), size.width * 0.04);
     drawBubble(Offset(size.width * 0.35, size.height * 0.75), size.width * 0.035);
