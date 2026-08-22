@@ -5,114 +5,69 @@ import 'package:flutter/rendering.dart';
 import 'ui_basic.dart';
 
 // ==========================================
-// 新增：液态玻璃 SnackBar
+// 新增：液态玻璃 SnackBar（优化版）
 // ==========================================
 
 /// 显示一个具有液态玻璃质感的 SnackBar，无任何边框。
-/// 
-/// 自动从 [LiquidGlassScope] 获取背景纹理；若不存在，则截取当前屏幕并实时处理。
-/// SnackBar 高度固定为 80，内容居中显示，支持自定义内容。
+///
+/// 如果当前上下文存在 [LiquidGlassScope] 且已生成背景纹理，则使用真正的
+/// [LiquidGlassContainer] 渲染玻璃效果；否则回退到一种轻量的半透明白色圆角容器，
+/// 避免截图开销，同时保持视觉一致性。
 void showLiquidGlassSnackBar(BuildContext context, Widget content) {
   final messenger = ScaffoldMessenger.of(context);
   final scopeData = LiquidGlassScope.of(context);
 
-  // 优先使用 Scope 中已生成的背景纹理（同步）
-  if (scopeData?.backgroundImage != null && scopeData?.bgSize != null) {
-    _showSnackBarWithImage(
-      messenger,
-      context,
-      content,
-      scopeData!.backgroundImage!,
-      scopeData.bgSize,
-      disposeImage: false, // Scope 管理生命周期
-    );
-  } else {
-    // 否则异步截屏并处理（适用于未包裹 LiquidGlassScope 的情况）
-    _captureAndShowSnackBar(messenger, context, content);
-  }
-}
+  // 尝试从 Scope 获取共享背景纹理
+  final bgImage = scopeData?.backgroundImage;
+  final bgSize = scopeData?.bgSize;
 
-/// 异步截取当前屏幕，处理后显示 SnackBar
-Future<void> _captureAndShowSnackBar(
-  ScaffoldMessengerState messenger,
-  BuildContext context,
-  Widget content,
-) async {
-  try {
-    // 截取整个屏幕
-    final renderView = WidgetsBinding.instance.renderView;
-    final pixelRatio = View.of(context).devicePixelRatio;
-    final rawImage = await renderView.toImage(pixelRatio: pixelRatio);
-
-    // 应用模糊 + 变暗处理（使用默认配置）
-    final processedImage = await processSnapshotImage(
-      rawImage,
-      config: const SnapshotConfig(),
-    );
-    // 释放原始图像（processSnapshotImage 内部会复制，原始需手动释放）
-    rawImage.dispose();
-
-    if (!messenger.mounted) {
-      processedImage.dispose();
-      return;
+  // 构建 SnackBar 的内容 Widget（容器）
+  Widget buildContainer() {
+    if (bgImage != null && bgSize != null) {
+      // 有玻璃纹理 → 使用真正的 LiquidGlassContainer
+      return SizedBox(
+        height: 80, // 固定高度，与常规 SnackBar 一致
+        child: LiquidGlassContainer(
+          width: double.infinity,
+          height: double.infinity,
+          borderRadius: 16,
+          backgroundImage: bgImage,
+          bgSize: bgSize,
+          refractionIntensity: 7,
+          edgeMargin: 20,
+          child: Center(child: content),
+        ),
+      );
+    } else {
+      // 无纹理 → 回退到轻量半透明样式（无边框）
+      return Container(
+        height: 80,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(16),
+          // 明确去掉任何边框
+          border: Border.all(color: Colors.transparent, width: 0),
+          boxShadow: null, // 无阴影，保持扁平
+        ),
+        child: Center(child: content),
+      );
     }
-
-    final screenSize = MediaQuery.sizeOf(context);
-    _showSnackBarWithImage(
-      messenger,
-      context,
-      content,
-      processedImage,
-      screenSize,
-      disposeImage: true, // 由本函数创建的图像，需在 SnackBar 关闭后释放
-    );
-  } catch (e) {
-    // 发生异常时降级为普通 SnackBar
-    debugPrint('LiquidGlass SnackBar 截图失败，回退到普通 SnackBar: $e');
-    messenger.showSnackBar(SnackBar(content: content));
   }
-}
 
-/// 使用给定的背景图像构建并显示 SnackBar
-void _showSnackBarWithImage(
-  ScaffoldMessengerState messenger,
-  BuildContext context,
-  Widget content,
-  ui.Image bgImage,
-  Size bgSize, {
-  bool disposeImage = false,
-}) {
-  // 构建 SnackBar，完全透明背景，无边框无阴影
   final snackBar = SnackBar(
-    backgroundColor: Colors.transparent,
-    elevation: 0,
+    backgroundColor: Colors.transparent,          // 背景完全透明
+    elevation: 0,                                 // 无阴影
     shape: const RoundedRectangleBorder(
-      side: BorderSide.none, // 去掉边框
+      side: BorderSide.none,                      // 去掉系统边框
       borderRadius: BorderRadius.all(Radius.circular(16)),
     ),
     behavior: SnackBarBehavior.floating,
     margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-    content: SizedBox(
-      height: 80, // 固定高度，匹配常见 SnackBar
-      child: LiquidGlassContainer(
-        width: double.infinity,
-        height: double.infinity, // 由父 SizedBox 约束
-        borderRadius: 16,
-        backgroundImage: bgImage,
-        bgSize: bgSize,
-        refractionIntensity: 7,
-        edgeMargin: 20,
-        child: Center(child: content), // 内容居中
-      ),
-    ),
+    content: buildContainer(),
   );
 
-  final controller = messenger.showSnackBar(snackBar);
-
-  // 若图像为本函数创建，则在 SnackBar 关闭后释放显存
-  if (disposeImage) {
-    controller.closed.then((_) => bgImage.dispose());
-  }
+  messenger.showSnackBar(snackBar);
 }
 
 
