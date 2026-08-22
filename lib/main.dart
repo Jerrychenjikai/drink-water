@@ -294,8 +294,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-import 'package:flutter/material.dart';
-
 class GradientBackgroundPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
