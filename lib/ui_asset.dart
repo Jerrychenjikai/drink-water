@@ -13,7 +13,7 @@ Future<void> showLiquidGlassSnackBar({
   required Widget content,
   double height = 80,
   double borderRadius = 16,
-  double refractionIntensity = 1.5,
+  double refractionIntensity = 3,
   double edgeMargin = 20,
 }) async {
   // 1. 直接截取背景图
