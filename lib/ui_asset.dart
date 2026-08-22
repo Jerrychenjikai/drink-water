@@ -5,15 +5,9 @@ import 'package:flutter/rendering.dart';
 import 'ui_basic.dart';
 
 // ==========================================
-// 新增：液态玻璃 SnackBar（优化版）
+// 新增：液态玻璃 SnackBar
 // ==========================================
-
-/// 显示一个具有液态玻璃质感的 SnackBar，无任何边框。
-///
-/// 如果当前上下文存在 [LiquidGlassScope] 且已生成背景纹理，则使用真正的
-/// [LiquidGlassContainer] 渲染玻璃效果；否则回退到一种轻量的半透明白色圆角容器，
-/// 避免截图开销，同时保持视觉一致性。
-void showLiquidGlassSnackBar(BuildContext context, Widget content) {
+void showLiquidGlassSnackBar(BuildContext context, Widget content, {ui.Image? backgroundImage}) {
   final messenger = ScaffoldMessenger.of(context);
 
   final snackBar = SnackBar(
@@ -29,7 +23,7 @@ void showLiquidGlassSnackBar(BuildContext context, Widget content) {
       builder: (innerContext) {
         // 关键：在 SnackBar 真正 Build 时，使用它内部的 innerContext 向上查找 Scope
         final scopeData = LiquidGlassScope.of(innerContext);
-        final bgImage = scopeData?.backgroundImage;
+        final bgImage = backgroundImage ?? scopeData?.backgroundImage;
         final bgSize = scopeData?.bgSize;
 
         if (bgImage != null && bgSize != null) {
