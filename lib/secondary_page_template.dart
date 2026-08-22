@@ -8,8 +8,6 @@ class FluidRoute {
     required BuildContext context,
     required GlobalKey backgroundKey,
     required Widget Function(BuildContext context, ui.Image snapshotImage) pageBuilder,
-    double blurSigma = 16.0,
-    double darkenOpacity = 0.05,
     Duration transitionDuration = const Duration(milliseconds: 300),
   }) async {
     ui.Image? rawSnapshot;
@@ -28,8 +26,6 @@ class FluidRoute {
       // 2. 离屏预处理
       processedSnapshot = await processSnapshotImage(
         rawSnapshot,
-        blurSigma: blurSigma,
-        darkenOpacity: darkenOpacity,
       );
 
       // 【关键】原始截图使命完成，如果 processSnapshotImage 内部没释放，这里必须手动释放

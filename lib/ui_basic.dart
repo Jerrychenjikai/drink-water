@@ -87,7 +87,7 @@ class LiquidGlassScope extends StatefulWidget {
     super.key,
     required this.painter,
     required this.child,
-    this.blur = false,
+    this.blur = true,
     this.snapshotConfig = const SnapshotConfig(),
   });
 

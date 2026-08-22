@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'ui_basic.dart';
 
 void showLiquidGlassSnackBar(BuildContext context, Widget content) {
   ScaffoldMessenger.of(context).showSnackBar(
@@ -14,7 +15,6 @@ void showLiquidGlassSnackBar(BuildContext context, Widget content) {
       content: LiquidGlassContainer(
         borderRadius: 16, // 可根据需要调整
         edgeMargin: 0,    // 设置为0以贴合容器
-        blur: true,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: content,
