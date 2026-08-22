@@ -211,11 +211,10 @@ class _WaterRecordPageState extends State<WaterRecordPage> {
                     bool success = await _waterTracking.recordWaterIntake(milliliters: milliliters);
                     if (context.mounted) {
                       Navigator.of(context).pop();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            success ? 'Sucecessfully recorded ${milliliters.toInt()} ml！' : 'Recording failed',
-                          ),
+                      showLiquidGlassSnackBar(
+                        context, 
+                        Text(
+                          success ? 'Sucecessfully recorded ${milliliters.toInt()} ml！' : 'Recording failed',
                         ),
                       );
                       setState((){_initHealthData();});
