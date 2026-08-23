@@ -203,49 +203,54 @@ class _FluidPageWrapperState extends State<FluidPageWrapper>
               ),
 
               // 2. 顶层内容（动画层）
-              SafeArea(
-                child: AnimatedBuilder(
-                  animation: _controller,
-                  builder: (context, child) {
-                    if (widget.customBuilder != null) {
-                      return widget.customBuilder!(
-                        context,
-                        _controller,
-                        _topSlideAnim,
-                        _bottomSlideAnim,
-                        _scaleAnim,
-                        _handlePop,
-                      );
-                    }
-
-                    return ListView(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      physics: const BouncingScrollPhysics(),
-                      children: [
-                        if (widget.topChildBuilder != null)
-                          Transform.translate(
-                            offset: _topSlideAnim.value * screenSize.height,
-                            child: Transform.scale(
-                              scale: _scaleAnim.value,
-                              child: widget.topChildBuilder!(context, _handlePop),
-                            ),
-                          ),
-
-                        if (widget.topChildBuilder != null && widget.bottomChildBuilder != null)
-                          const SizedBox(height: 20),
-
-                        if (widget.bottomChildBuilder != null)
-                          Transform.translate(
-                            offset: _bottomSlideAnim.value * screenSize.height,
-                            child: Transform.scale(
-                              scale: _scaleAnim.value,
-                              child: widget.bottomChildBuilder!(context, _handlePop),
-                            ),
-                          ),
-                      ],
+              AnimatedBuilder(
+                animation: _controller,
+                builder: (context, child) {
+                  if (widget.customBuilder != null) {
+                    return widget.customBuilder!(
+                      context,
+                      _controller,
+                      _topSlideAnim,
+                      _bottomSlideAnim,
+                      _scaleAnim,
+                      _handlePop,
                     );
-                  },
-                ),
+                  }
+
+                  return ListView(
+                    // 将安全区域的距离移到 ListView 的 padding 中
+                    // 这样初始位置是安全的，但滚动时内容可以穿透到状态栏和底部区域下方
+                    padding: EdgeInsets.only(
+                      top: MediaQuery.paddingOf(context).top,
+                      bottom: MediaQuery.paddingOf(context).bottom,
+                      left: 24.0,
+                      right: 24.0,
+                    ),
+                    physics: const BouncingScrollPhysics(),
+                    children: [
+                      if (widget.topChildBuilder != null)
+                        Transform.translate(
+                          offset: _topSlideAnim.value * screenSize.height,
+                          child: Transform.scale(
+                            scale: _scaleAnim.value,
+                            child: widget.topChildBuilder!(context, _handlePop),
+                          ),
+                        ),
+
+                      if (widget.topChildBuilder != null && widget.bottomChildBuilder != null)
+                        const SizedBox(height: 20),
+
+                      if (widget.bottomChildBuilder != null)
+                        Transform.translate(
+                          offset: _bottomSlideAnim.value * screenSize.height,
+                          child: Transform.scale(
+                            scale: _scaleAnim.value,
+                            child: widget.bottomChildBuilder!(context, _handlePop),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
             ],
           ),
