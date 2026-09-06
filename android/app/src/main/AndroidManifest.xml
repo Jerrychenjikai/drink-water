@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.health.WRITE_HYDRATION"/>
     <application
         android:label="drink_water"
-        android:name="${applicationName}"
+        android:name="SipTrace"
         android:icon="@mipmap/launcher_icon">
         <activity
             android:name=".MainActivity"
