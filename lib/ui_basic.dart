@@ -32,7 +32,7 @@ class SnapshotConfig {
 // ==========================================
 ui.FragmentShader? _globalRefractionShader;
 
-Future<void> preloadLiquidGlassShader({String assetPath = 'shaders/refraction.frag'}) async {
+Future<void> preloadLiquidGlassShader({String assetPath = 'shaders/shader.frag'}) async {
   if (_globalRefractionShader != null) return;
   try {
     final program = await ui.FragmentProgram.fromAsset(assetPath);
@@ -104,15 +104,30 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
   ui.Image? _bgImage;
   Size _lastSize = Size.zero;
 
+  // Only one snapshot generation is allowed at a time. If the painter changes
+  // while a snapshot is being generated, we mark the texture dirty and capture
+  // the newest painter as soon as the current generation finishes.
+  bool _textureDirty = false;
+  bool _isGeneratingTexture = false;
+  bool _textureUpdateScheduled = false;
+
+  bool _painterNeedsUpdate(CustomPainter oldPainter, CustomPainter newPainter) {
+    if (oldPainter.runtimeType != newPainter.runtimeType) {
+      return true;
+    }
+    return newPainter.shouldRepaint(oldPainter);
+  }
+
   @override
   void didUpdateWidget(covariant LiquidGlassScope oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 当 Painter（如背景主题）发生改变，或者模糊配置发生改变时自动刷新纹理
-    if ((oldWidget.painter != widget.painter || 
-         oldWidget.blur != widget.blur || 
-         oldWidget.snapshotConfig != widget.snapshotConfig) && 
-        _lastSize != Size.zero) {
-      _generateTexture(_lastSize);
+
+    final painterChanged = _painterNeedsUpdate(oldWidget.painter, widget.painter);
+    final snapshotConfigChanged = oldWidget.blur != widget.blur ||
+        oldWidget.snapshotConfig != widget.snapshotConfig;
+
+    if (painterChanged || snapshotConfigChanged) {
+      _requestTextureUpdate();
     }
   }
 
@@ -122,32 +137,79 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
     super.dispose();
   }
 
-  /// 统一的生成背景纹理逻辑，同一个页面无论多少个玻璃卡片，此方法只执行一次
-  Future<void> _generateTexture(Size size) async {
-    if (size.width <= 0 || size.height <= 0) return;
+  void _requestTextureUpdate() {
+    if (!mounted || _lastSize == Size.zero) return;
 
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, size.width, size.height));
-    
-    widget.painter.paint(canvas, size);
-    
-    final picture = recorder.endRecording();
-    final newImage = await picture.toImage(size.width.toInt(), size.height.toInt());
-    
-    ui.Image finalImage = newImage;
-    // 如果启用了 blur，则调用图像处理函数
-    if (widget.blur) {
-      finalImage = await processSnapshotImage(newImage, config: widget.snapshotConfig);
-      newImage.dispose(); // 释放未模糊的原始图像显存
-    }
+    _textureDirty = true;
+    if (_isGeneratingTexture || _textureUpdateScheduled) return;
 
-    if (mounted) {
+    _textureUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _textureUpdateScheduled = false;
+      if (!mounted || !_textureDirty || _isGeneratingTexture) return;
+      _generateLatestTexture();
+    });
+  }
+
+  /// Capture the latest painter state. Changes that happen while this is
+  /// running are coalesced into one follow-up capture instead of starting a
+  /// new screenshot for every scroll callback.
+  Future<void> _generateLatestTexture() async {
+    if (!mounted || _isGeneratingTexture || _lastSize == Size.zero) return;
+
+    _isGeneratingTexture = true;
+    _textureDirty = false;
+
+    final size = _lastSize;
+    final painter = widget.painter;
+    final blur = widget.blur;
+    final snapshotConfig = widget.snapshotConfig;
+
+    try {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(
+        recorder,
+        Rect.fromLTWH(0, 0, size.width, size.height),
+      );
+
+      painter.paint(canvas, size);
+
+      final picture = recorder.endRecording();
+      final rawImage = await picture.toImage(
+        size.width.toInt(),
+        size.height.toInt(),
+      );
+      picture.dispose();
+
+      ui.Image finalImage = rawImage;
+      if (blur) {
+        finalImage = await processSnapshotImage(
+          rawImage,
+          config: snapshotConfig,
+        );
+        rawImage.dispose();
+      }
+
+      if (!mounted) {
+        finalImage.dispose();
+        return;
+      }
+
       setState(() {
-        _bgImage?.dispose(); // 释放旧显存
+        _bgImage?.dispose();
         _bgImage = finalImage;
       });
-    } else {
-      finalImage.dispose();
+    } catch (e, stackTrace) {
+      debugPrint('Liquid Glass background snapshot failed: $e');
+      debugPrintStack(stackTrace: stackTrace);
+    } finally {
+      _isGeneratingTexture = false;
+
+      // A newer painter/state arrived while the current generation was in
+      // progress. Capture the newest one rather than the stale one.
+      if (mounted && _textureDirty) {
+        _requestTextureUpdate();
+      }
     }
   }
 
@@ -157,9 +219,7 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
 
     if (_lastSize != screenSize) {
       _lastSize = screenSize;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _generateTexture(screenSize);
-      });
+      _requestTextureUpdate();
     }
 
     return _LiquidGlassInherited(
@@ -332,7 +392,7 @@ Future<T?> showLiquidGlassPopup<T>({
   required BuildContext context,
   required GlobalKey backgroundKey,
   required Widget child,
-  String shaderAssetPath = 'shaders/refraction.frag',
+  String shaderAssetPath = 'shaders/shader.frag',
   double width = 320,
   double height = 460,
   double borderRadius = 32.0,
