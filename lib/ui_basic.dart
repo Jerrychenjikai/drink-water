@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -32,8 +33,11 @@ class SnapshotConfig {
 // ==========================================
 ui.FragmentShader? _globalRefractionShader;
 
-Future<void> preloadLiquidGlassShader({String assetPath = 'shaders/shader.frag'}) async {
+Future<void> preloadLiquidGlassShader({
+  String assetPath = 'shaders/refraction.frag',
+}) async {
   if (_globalRefractionShader != null) return;
+
   try {
     final program = await ui.FragmentProgram.fromAsset(assetPath);
     _globalRefractionShader = program.fragmentShader();
@@ -42,202 +46,601 @@ Future<void> preloadLiquidGlassShader({String assetPath = 'shaders/shader.frag'}
   }
 }
 
+// ==========================================
+// 对快照图片进行模糊 / 亮度处理
+// ==========================================
 Future<ui.Image> processSnapshotImage(
   ui.Image inputImage, {
   SnapshotConfig config = const SnapshotConfig(),
 }) async {
   final recorder = ui.PictureRecorder();
+
   final canvas = Canvas(
     recorder,
-    Rect.fromLTWH(0, 0, inputImage.width.toDouble(), inputImage.height.toDouble()),
+    Rect.fromLTWH(
+      0,
+      0,
+      inputImage.width.toDouble(),
+      inputImage.height.toDouble(),
+    ),
   );
 
-  // 配置画笔：高斯模糊 + 黑色混合模式（降亮度）
   final paint = Paint()
     ..imageFilter = ui.ImageFilter.blur(
       sigmaX: config.blurSigma,
       sigmaY: config.blurSigma,
-      tileMode: TileMode.clamp, // 避免边缘模糊白边
+      tileMode: TileMode.clamp,
     )
     ..colorFilter = ColorFilter.mode(
       Colors.black.withOpacity(config.darkenOpacity),
       BlendMode.lighten,
     );
 
-  // 将原图绘制进 Recorder
-  canvas.drawImage(inputImage, Offset.zero, paint);
+  canvas.drawImage(
+    inputImage,
+    Offset.zero,
+    paint,
+  );
 
-  // 导出处理后的图像（极快，耗时通常 < 3毫秒）
   final picture = recorder.endRecording();
-  return await picture.toImage(inputImage.width, inputImage.height);
+
+  return await picture.toImage(
+    inputImage.width,
+    inputImage.height,
+  );
 }
 
 // ==========================================
 // 背景纹理共享 Scope
+//
+// 同时兼容两种背景来源：
+//
+// 1. painter
+//    直接重放 CustomPainter 生成纹理。
+//    支持:
+//      - painter.shouldRepaint()
+//      - painter 自身 Listenable 通知
+//      - painter 替换
+//
+// 2. repaintBoundaryKey
+//    从真实 RenderRepaintBoundary 捕获背景纹理。
+//    保留旧版本接口与行为。
+//
+// 当 painter 和 repaintBoundaryKey 同时存在时：
+//     painter 优先。
 // ==========================================
 class LiquidGlassScope extends StatefulWidget {
-  final CustomPainter painter;
+  /// 直接传入 CustomPainter。
+  ///
+  /// Scope 会调用 painter.paint() 来生成背景纹理，
+  /// 并监听 painter 自身的 repaint 通知。
+  final CustomPainter? painter;
+
+  /// 从 RenderRepaintBoundary 捕获真实背景。
+  ///
+  /// 当 painter == null 时使用。
+  final GlobalKey? repaintBoundaryKey;
+
   final Widget child;
-  
-  // 新增：是否模糊以及模糊参数配置
+
+  /// 是否对生成的背景纹理进行模糊。
   final bool blur;
+
+  /// 背景纹理后处理配置。
   final SnapshotConfig snapshotConfig;
 
   const LiquidGlassScope({
     super.key,
-    required this.painter,
+    this.painter,
+    this.repaintBoundaryKey,
     required this.child,
     this.blur = true,
     this.snapshotConfig = const SnapshotConfig(),
   });
 
-  /// 供子组件获取背景纹理和尺寸数据
+  /// 获取当前 Scope 的背景纹理数据。
   static _LiquidGlassData? of(BuildContext context) {
-    return context.dependOnInheritedWidgetOfExactType<_LiquidGlassInherited>()?.data;
+    return context
+        .dependOnInheritedWidgetOfExactType<_LiquidGlassInherited>()
+        ?.data;
+  }
+
+  /// 手动通知 Scope 重新捕获背景纹理。
+  ///
+  /// 兼容旧版本接口。
+  static void notifyUpdate(BuildContext context) {
+    final state =
+        context.findAncestorStateOfType<_LiquidGlassScopeState>();
+
+    state?._requestTextureUpdate();
   }
 
   @override
-  State<LiquidGlassScope> createState() => _LiquidGlassScopeState();
+  State<LiquidGlassScope> createState() =>
+      _LiquidGlassScopeState();
 }
 
 class _LiquidGlassScopeState extends State<LiquidGlassScope> {
   ui.Image? _bgImage;
-  Size _lastSize = Size.zero;
 
-  // Only one snapshot generation is allowed at a time. If the painter changes
-  // while a snapshot is being generated, we mark the texture dirty and capture
-  // the newest painter as soon as the current generation finishes.
+  /// 当前用于生成 painter 纹理的尺寸。
+  Size _lastBgSize = Size.zero;
+
+  /// 最近一次看到的屏幕尺寸。
+  Size _lastScreenSize = Size.zero;
+
+  /// 是否已经收到新的纹理更新请求。
   bool _textureDirty = false;
+
+  /// 当前是否正在生成纹理。
   bool _isGeneratingTexture = false;
+
+  /// 当前是否已经安排了 post-frame 更新任务。
   bool _textureUpdateScheduled = false;
 
-  bool _painterNeedsUpdate(CustomPainter oldPainter, CustomPainter newPainter) {
+  // ------------------------------------------
+  // Painter Listenable 监听
+  // ------------------------------------------
+
+  void _attachPainterListener(CustomPainter? painter) {
+    painter?.addListener(_handlePainterRepaint);
+  }
+
+  void _detachPainterListener(CustomPainter? painter) {
+    painter?.removeListener(_handlePainterRepaint);
+  }
+
+  void _handlePainterRepaint() {
+    _requestTextureUpdate();
+  }
+
+  // ------------------------------------------
+  // 判断 painter 是否发生需要重绘的变化
+  // ------------------------------------------
+
+  bool _painterNeedsUpdate(
+    CustomPainter? oldPainter,
+    CustomPainter? newPainter,
+  ) {
+    if (identical(oldPainter, newPainter)) {
+      return false;
+    }
+
+    if (oldPainter == null || newPainter == null) {
+      return true;
+    }
+
     if (oldPainter.runtimeType != newPainter.runtimeType) {
       return true;
     }
+
     return newPainter.shouldRepaint(oldPainter);
   }
 
+  // ------------------------------------------
+  // 初始化
+  // ------------------------------------------
+
   @override
-  void didUpdateWidget(covariant LiquidGlassScope oldWidget) {
+  void initState() {
+    super.initState();
+
+    _attachPainterListener(widget.painter);
+
+    // 首次渲染完成后自动捕获一次背景纹理。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      // painter 模式使用屏幕尺寸；
+      // boundary 模式也需要一个初始尺寸。
+      if (_lastBgSize == Size.zero) {
+        _lastBgSize = MediaQuery.sizeOf(context);
+      }
+
+      _requestTextureUpdate();
+    });
+  }
+
+  // ------------------------------------------
+  // Widget 更新
+  // ------------------------------------------
+
+  @override
+  void didUpdateWidget(
+    covariant LiquidGlassScope oldWidget,
+  ) {
     super.didUpdateWidget(oldWidget);
 
-    final painterChanged = _painterNeedsUpdate(oldWidget.painter, widget.painter);
-    final snapshotConfigChanged = oldWidget.blur != widget.blur ||
+    // painter 实例发生替换时重新挂监听。
+    if (!identical(oldWidget.painter, widget.painter)) {
+      _detachPainterListener(oldWidget.painter);
+      _attachPainterListener(widget.painter);
+    }
+
+    final painterChanged = _painterNeedsUpdate(
+      oldWidget.painter,
+      widget.painter,
+    );
+
+    final sourceChanged =
+        oldWidget.repaintBoundaryKey !=
+        widget.repaintBoundaryKey;
+
+    final snapshotConfigChanged =
+        oldWidget.blur != widget.blur ||
         oldWidget.snapshotConfig != widget.snapshotConfig;
 
-    if (painterChanged || snapshotConfigChanged) {
+    if (
+      painterChanged ||
+      sourceChanged ||
+      snapshotConfigChanged
+    ) {
       _requestTextureUpdate();
     }
   }
 
+  // ------------------------------------------
+  // 销毁
+  // ------------------------------------------
+
   @override
   void dispose() {
-    _bgImage?.dispose(); // 页面销毁时统一释放显存
+    _detachPainterListener(widget.painter);
+
+    _bgImage?.dispose();
+
     super.dispose();
   }
 
+  // ------------------------------------------
+  // 请求更新纹理
+  // ------------------------------------------
+
   void _requestTextureUpdate() {
-    if (!mounted || _lastSize == Size.zero) return;
+    if (!mounted) return;
+
+    if (_lastBgSize == Size.zero) {
+      return;
+    }
 
     _textureDirty = true;
-    if (_isGeneratingTexture || _textureUpdateScheduled) return;
+
+    // 当前正在生成时，不再并发生成。
+    // 当前任务结束后会再次处理最新状态。
+    if (_isGeneratingTexture) {
+      return;
+    }
+
+    // 已经安排过下一帧，也不需要重复安排。
+    if (_textureUpdateScheduled) {
+      return;
+    }
 
     _textureUpdateScheduled = true;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _textureUpdateScheduled = false;
-      if (!mounted || !_textureDirty || _isGeneratingTexture) return;
+
+      if (
+        !mounted ||
+        !_textureDirty ||
+        _isGeneratingTexture
+      ) {
+        return;
+      }
+
       _generateLatestTexture();
     });
   }
 
-  /// Capture the latest painter state. Changes that happen while this is
-  /// running are coalesced into one follow-up capture instead of starting a
-  /// new screenshot for every scroll callback.
+  // ------------------------------------------
+  // 生成最新纹理
+  // ------------------------------------------
+  //
+  // painter 模式：
+  //
+  //     painter.paint()
+  //         ↓
+  //     Picture
+  //         ↓
+  //     Image
+  //
+  // repaintBoundary 模式：
+  //
+  //     RenderRepaintBoundary.toImage()
+  //
+  // 生成过程中如果又发生新的更新，不启动第二个并发任务，
+  // 而是把 _textureDirty 保持为 true。
+  //
+  // 当前任务完成以后，会再捕获一次最新状态。
+  // ------------------------------------------
+
   Future<void> _generateLatestTexture() async {
-    if (!mounted || _isGeneratingTexture || _lastSize == Size.zero) return;
+    if (
+      !mounted ||
+      _isGeneratingTexture ||
+      _lastBgSize == Size.zero
+    ) {
+      return;
+    }
 
     _isGeneratingTexture = true;
     _textureDirty = false;
 
-    final size = _lastSize;
+    ui.Image? rawImage;
+    ui.Image? finalImage;
+    ui.Picture? picture;
+
+    final size = _lastBgSize;
+
+    // 在任务开始时锁定当前 painter / config，
+    // 避免生成过程中 widget 替换导致使用混杂状态。
     final painter = widget.painter;
     final blur = widget.blur;
     final snapshotConfig = widget.snapshotConfig;
 
+    bool success = false;
+
     try {
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(
-        recorder,
-        Rect.fromLTWH(0, 0, size.width, size.height),
-      );
+      // ==========================================
+      // 模式 A：直接从 CustomPainter 生成纹理
+      // ==========================================
+      if (painter != null) {
+        final recorder = ui.PictureRecorder();
 
-      painter.paint(canvas, size);
-
-      final picture = recorder.endRecording();
-      final rawImage = await picture.toImage(
-        size.width.toInt(),
-        size.height.toInt(),
-      );
-      picture.dispose();
-
-      ui.Image finalImage = rawImage;
-      if (blur) {
-        finalImage = await processSnapshotImage(
-          rawImage,
-          config: snapshotConfig,
+        final canvas = Canvas(
+          recorder,
+          Rect.fromLTWH(
+            0,
+            0,
+            size.width,
+            size.height,
+          ),
         );
-        rawImage.dispose();
+
+        painter.paint(
+          canvas,
+          size,
+        );
+
+        picture = recorder.endRecording();
+
+        rawImage = await picture.toImage(
+          max(
+            1,
+            size.width.round(),
+          ),
+          max(
+            1,
+            size.height.round(),
+          ),
+        );
+
+        picture.dispose();
+        picture = null;
       }
 
-      if (!mounted) {
-        finalImage.dispose();
-        return;
+      // ==========================================
+      // 模式 B：从 RenderRepaintBoundary 生成纹理
+      // ==========================================
+      else {
+        final boundaryKey =
+            widget.repaintBoundaryKey;
+
+        if (boundaryKey != null) {
+          final boundary =
+              boundaryKey.currentContext
+                  ?.findRenderObject()
+              as RenderRepaintBoundary?;
+
+          if (
+            boundary != null &&
+            boundary.attached &&
+            boundary.hasSize
+          ) {
+            final bgSize = boundary.size;
+
+            // 保留旧版本限制：
+            // 最多使用 1.2 倍像素比例，
+            // 避免截图过大影响流畅度。
+            final dpr =
+                MediaQuery.of(context)
+                    .devicePixelRatio;
+
+            final targetRatio = min(
+              dpr,
+              1.2,
+            );
+
+            rawImage =
+                await boundary.toImage(
+              pixelRatio: targetRatio,
+            );
+
+            // 真实 Boundary 的尺寸优先作为背景尺寸。
+            if (bgSize != _lastBgSize) {
+              _lastBgSize = bgSize;
+            }
+          }
+        }
       }
 
-      setState(() {
-        _bgImage?.dispose();
-        _bgImage = finalImage;
-      });
-    } catch (e, stackTrace) {
-      debugPrint('Liquid Glass background snapshot failed: $e');
-      debugPrintStack(stackTrace: stackTrace);
+      // ==========================================
+      // 对生成的图片进行后处理
+      // ==========================================
+
+      if (rawImage != null) {
+        finalImage = rawImage;
+
+        if (blur) {
+          finalImage =
+              await processSnapshotImage(
+            rawImage,
+            config: snapshotConfig,
+          );
+
+          rawImage.dispose();
+          rawImage = null;
+        }
+
+        // 组件已经销毁。
+        if (!mounted) {
+          finalImage?.dispose();
+          finalImage = null;
+
+          return;
+        }
+
+        setState(() {
+          _bgImage?.dispose();
+
+          _bgImage = finalImage;
+
+          // 所有权转移给 State。
+          finalImage = null;
+        });
+
+        success = true;
+      }
+    } catch (
+      e,
+      stackTrace
+    ) {
+      debugPrint(
+        'Liquid Glass background snapshot failed: $e',
+      );
+
+      debugPrintStack(
+        stackTrace: stackTrace,
+      );
     } finally {
+      picture?.dispose();
+      rawImage?.dispose();
+      finalImage?.dispose();
+
       _isGeneratingTexture = false;
 
-      // A newer painter/state arrived while the current generation was in
-      // progress. Capture the newest one rather than the stale one.
-      if (mounted && _textureDirty) {
+      // 当前生成期间发生了新的更新：
+      // 再捕获最新状态。
+      //
+      // 如果第一次截图失败，
+      // 例如 RenderRepaintBoundary 尚未完成 Paint，
+      // 也会自动在下一帧继续尝试。
+      if (
+        mounted &&
+        (
+          _textureDirty ||
+          (!success && _bgImage == null)
+        )
+      ) {
         _requestTextureUpdate();
       }
     }
   }
 
+  // ------------------------------------------
+  // Build
+  // ------------------------------------------
+
   @override
   Widget build(BuildContext context) {
-    final screenSize = MediaQuery.sizeOf(context);
+    final screenSize =
+        MediaQuery.sizeOf(context);
 
-    if (_lastSize != screenSize) {
-      _lastSize = screenSize;
+    // 屏幕尺寸发生变化时重新捕获背景。
+    //
+    // 这可以覆盖：
+    // - 手机横竖屏切换
+    // - 窗口缩放
+    // - 平板尺寸变化
+    // - Web / Desktop resize
+    if (_lastScreenSize != screenSize) {
+      _lastScreenSize = screenSize;
+
+      // painter 模式始终跟随屏幕尺寸。
+      //
+      // boundary 模式如果尚未获得真实尺寸，
+      // 则先使用屏幕尺寸作为临时值。
+      if (
+        widget.painter != null ||
+        _lastBgSize == Size.zero
+      ) {
+        _lastBgSize = screenSize;
+      }
+
       _requestTextureUpdate();
     }
 
     return _LiquidGlassInherited(
       data: _LiquidGlassData(
         backgroundImage: _bgImage,
-        bgSize: screenSize,
+
+        bgSize:
+            _lastBgSize == Size.zero
+                ? screenSize
+                : _lastBgSize,
+
+        boundaryKey:
+            widget.repaintBoundaryKey,
       ),
-      child: widget.child,
+
+      child: Listener(
+        behavior:
+            HitTestBehavior.translucent,
+
+        // 触摸开始时重新捕获。
+        onPointerDown: (_) {
+          _requestTextureUpdate();
+        },
+
+        // 触摸移动时重新捕获。
+        onPointerMove: (_) {
+          _requestTextureUpdate();
+        },
+
+        // 触摸结束时重新捕获。
+        onPointerUp: (_) {
+          _requestTextureUpdate();
+        },
+
+        child: NotificationListener<
+            ScrollNotification>(
+          onNotification: (notification) {
+            _requestTextureUpdate();
+
+            // 不阻断原有 ScrollNotification。
+            return false;
+          },
+
+          child: widget.child,
+        ),
+      ),
     );
   }
 }
 
+// ==========================================
+// Scope 数据
+// ==========================================
 class _LiquidGlassData {
   final ui.Image? backgroundImage;
+
   final Size bgSize;
-  _LiquidGlassData({this.backgroundImage, required this.bgSize});
+
+  /// 当背景来自 RenderRepaintBoundary 时，
+  /// 用于计算 LiquidGlassContainer 相对背景的位置。
+  final GlobalKey? boundaryKey;
+
+  _LiquidGlassData({
+    this.backgroundImage,
+    required this.bgSize,
+    this.boundaryKey,
+  });
 }
 
+// ==========================================
+// Inherited 数据
+// ==========================================
 class _LiquidGlassInherited extends InheritedWidget {
   final _LiquidGlassData data;
 
@@ -247,25 +650,51 @@ class _LiquidGlassInherited extends InheritedWidget {
   });
 
   @override
-  bool updateShouldNotify(_LiquidGlassInherited oldWidget) {
-    return oldWidget.data.backgroundImage != data.backgroundImage ||
-           oldWidget.data.bgSize != data.bgSize;
+  bool updateShouldNotify(
+    _LiquidGlassInherited oldWidget,
+  ) {
+    return
+        oldWidget.data.backgroundImage !=
+            data.backgroundImage ||
+        oldWidget.data.bgSize !=
+            data.bgSize ||
+        oldWidget.data.boundaryKey !=
+            data.boundaryKey;
   }
 }
 
 // ==========================================
-// 液态玻璃容器组件 (支持实时坐标捕捉与 Shader 渲染)
+// 液态玻璃容器
+//
+// 支持：
+// - 自定义尺寸
+// - 自定义圆角
+// - edgeMargin
+// - refractionIntensity
+// - 手动 backgroundImage
+// - 自动从 LiquidGlassScope 获取 backgroundImage
+// - 手动 bgSize
+// - 自动从 LiquidGlassScope 获取 bgSize
+// - ScrollPosition repaint
+// - RenderRepaintBoundary 相对坐标
 // ==========================================
-class LiquidGlassContainer extends StatefulWidget {
+class LiquidGlassContainer
+    extends StatefulWidget {
   final Widget child;
+
   final double width;
+
   final double height;
+
   final double borderRadius;
-  final double edgeMargin; 
-  
-  final ui.Image? backgroundImage; // 支持手动传入，不传则自动从 Scope 拿          
-  final double refractionIntensity;          
-  final Size? bgSize;              // 支持手动传入，不传则自动从 Scope 拿
+
+  final double edgeMargin;
+
+  final ui.Image? backgroundImage;
+
+  final double refractionIntensity;
+
+  final Size? bgSize;
 
   const LiquidGlassContainer({
     super.key,
@@ -280,208 +709,556 @@ class LiquidGlassContainer extends StatefulWidget {
   });
 
   @override
-  State<LiquidGlassContainer> createState() => _LiquidGlassContainerState();
+  State<LiquidGlassContainer>
+      createState() =>
+          _LiquidGlassContainerState();
 }
 
-class _LiquidGlassContainerState extends State<LiquidGlassContainer> {
-  // 保持 GlobalKey 在 State 中持久化，避免动画重建时重新创建 Key
-  final GlobalKey _containerKey = GlobalKey();
+class _LiquidGlassContainerState
+    extends State<LiquidGlassContainer> {
+  /// State 生命周期内保持同一个 Key。
+  final GlobalKey _containerKey =
+      GlobalKey();
 
   @override
   Widget build(BuildContext context) {
+    // Shader 尚未加载时异步加载。
     if (_globalRefractionShader == null) {
       preloadLiquidGlassShader();
     }
 
-    final scopeData = LiquidGlassScope.of(context);
-    final effectiveImage = widget.backgroundImage ?? scopeData?.backgroundImage;
-    final effectiveBgSize = widget.bgSize ?? scopeData?.bgSize ?? MediaQuery.sizeOf(context);
-    
-    // 关键：自动搜寻外层最近的 Scrollable 容器并获取其 ScrollPosition (继承自 Listenable)
-    final scrollPosition = Scrollable.maybeOf(context)?.position;
+    final scopeData =
+        LiquidGlassScope.of(context);
+
+    // 手动传入优先；
+    // 否则从 Scope 获取。
+    final effectiveImage =
+        widget.backgroundImage ??
+            scopeData?.backgroundImage;
+
+    // 手动传入优先；
+    // 否则从 Scope 获取。
+    final effectiveBgSize =
+        widget.bgSize ??
+            scopeData?.bgSize ??
+            MediaQuery.sizeOf(context);
+
+    // ------------------------------------------
+    // 圆角兼容
+    //
+    // 传入：
+    //     borderRadius < 0
+    //     或 borderRadius == infinity
+    //
+    // 自动按高度的一半处理。
+    // 保留旧版本接口语义。
+    // ------------------------------------------
+    double effectiveRadius =
+        widget.borderRadius;
+
+    if (
+      effectiveRadius < 0 ||
+      effectiveRadius == double.infinity
+    ) {
+      effectiveRadius =
+          widget.height != double.infinity
+              ? widget.height / 2
+              : 32.0;
+    }
+
+    // ------------------------------------------
+    // 监听最近的 Scrollable
+    //
+    // ScrollPosition 本身是 Listenable。
+    //
+    // 将它传给 _RefractionPainter 的 repaint，
+    // 即可在滚动时仅重绘 Painter，
+    // 不需要重新 build 整棵 Widget Tree。
+    // ------------------------------------------
+    final scrollPosition =
+        Scrollable.maybeOf(context)?.position;
 
     return SizedBox(
       key: _containerKey,
       width: widget.width,
       height: widget.height,
+
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(widget.borderRadius),
-        child: Stack(
-          children: [
-            if (_globalRefractionShader != null && effectiveImage != null)
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: _RefractionPainter(
-                    shader: _globalRefractionShader!,
-                    image: effectiveImage,
-                    intensity: widget.refractionIntensity,
-                    containerKey: _containerKey,
-                    bgSize: effectiveBgSize,
-                    borderRadius: widget.borderRadius, 
-                    edgeMargin: widget.edgeMargin / 1.5,
-                    repaint: scrollPosition, // 绑定滚动信号
-                  ),
-                ),
+        borderRadius:
+            BorderRadius.circular(
+          effectiveRadius,
+        ),
+
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(
+            sigmaX: 16,
+            sigmaY: 16,
+          ),
+
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius:
+                  BorderRadius.circular(
+                effectiveRadius,
               ),
-            widget.child,
-          ],
+
+              color:
+                  Colors.white.withOpacity(
+                0.12,
+              ),
+            ),
+
+            child: Stack(
+              children: [
+                // ==========================================
+                // Shader 背景
+                // ==========================================
+                if (
+                  _globalRefractionShader !=
+                          null &&
+                  effectiveImage != null
+                )
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter:
+                          _RefractionPainter(
+                        shader:
+                            _globalRefractionShader!,
+                        image:
+                            effectiveImage,
+                        intensity:
+                            widget
+                                .refractionIntensity,
+                        containerKey:
+                            _containerKey,
+                        backgroundKey:
+                            scopeData
+                                ?.boundaryKey,
+                        bgSize:
+                            effectiveBgSize,
+                        borderRadius:
+                            effectiveRadius,
+                        edgeMargin:
+                            widget.edgeMargin /
+                                1.5,
+
+                        // 绑定 ScrollPosition。
+                        repaint:
+                            scrollPosition,
+                      ),
+                    ),
+                  ),
+
+                // ==========================================
+                // 实际内容
+                // ==========================================
+                widget.child,
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-class _RefractionPainter extends CustomPainter {
+// ==========================================
+// 折射 Shader Painter
+// ==========================================
+class _RefractionPainter
+    extends CustomPainter {
   final ui.FragmentShader shader;
+
   final ui.Image image;
+
   final double intensity;
+
   final GlobalKey containerKey;
+
+  final GlobalKey? backgroundKey;
+
   final Size bgSize;
+
   final double borderRadius;
-  final double edgeMargin;   
+
+  final double edgeMargin;
 
   _RefractionPainter({
     required this.shader,
     required this.image,
     required this.intensity,
     required this.containerKey,
+    this.backgroundKey,
     required this.bgSize,
     required this.borderRadius,
     required this.edgeMargin,
-    Listenable? repaint, // 1. 新增 repaint 参数，用于接收滚动监听
-  }) : super(repaint: repaint); // 2. 关键：传递给父类 CustomPainter，实现自动局部位移重绘
+    Listenable? repaint,
+  }) : super(
+          repaint: repaint,
+        );
 
   @override
-  void paint(Canvas canvas, Size size) {
-    Offset currentOffset = Offset.zero;
-    final renderBox = containerKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null && renderBox.hasSize && renderBox.attached) {
-      currentOffset = renderBox.localToGlobal(Offset.zero);
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
+    Offset currentOffset =
+        Offset.zero;
+
+    // ------------------------------------------
+    // 获取 LiquidGlassContainer 的全局位置
+    // ------------------------------------------
+    final renderBox =
+        containerKey.currentContext
+                ?.findRenderObject()
+            as RenderBox?;
+
+    if (
+      renderBox != null &&
+      renderBox.hasSize &&
+      renderBox.attached
+    ) {
+      currentOffset =
+          renderBox.localToGlobal(
+        Offset.zero,
+      );
     }
 
-    shader.setFloat(0, size.width);
-    shader.setFloat(1, size.height);
-    shader.setFloat(2, currentOffset.dx);
-    shader.setFloat(3, currentOffset.dy);
-    shader.setFloat(4, bgSize.width);
-    shader.setFloat(5, bgSize.height);
-    shader.setFloat(6, intensity);
-    shader.setFloat(7, borderRadius);
-    shader.setFloat(8, edgeMargin);
-    shader.setImageSampler(0, image);
+    // ------------------------------------------
+    // 如果存在真实背景 Key：
+    //
+    // 把 Container 的全局坐标转换成
+    // 相对于背景 RenderRepaintBoundary 的坐标。
+    //
+    // 这样背景滚动 / 位移时，
+    // Shader 采样位置依然正确。
+    // ------------------------------------------
+    if (backgroundKey != null) {
+      final bgRenderBox =
+          backgroundKey!
+                  .currentContext
+                  ?.findRenderObject()
+              as RenderBox?;
 
-    final paint = Paint()..shader = shader;
-    canvas.drawRect(Offset.zero & size, paint);
+      if (
+        bgRenderBox != null &&
+        bgRenderBox.attached
+      ) {
+        final bgOffset =
+            bgRenderBox.localToGlobal(
+          Offset.zero,
+        );
+
+        currentOffset =
+            currentOffset - bgOffset;
+      }
+    }
+
+    // ------------------------------------------
+    // Shader 参数
+    //
+    // 0: container width
+    // 1: container height
+    // 2: x offset
+    // 3: y offset
+    // 4: background width
+    // 5: background height
+    // 6: refraction intensity
+    // 7: border radius
+    // 8: edge margin
+    // ------------------------------------------
+
+    shader.setFloat(
+      0,
+      size.width,
+    );
+
+    shader.setFloat(
+      1,
+      size.height,
+    );
+
+    shader.setFloat(
+      2,
+      currentOffset.dx,
+    );
+
+    shader.setFloat(
+      3,
+      currentOffset.dy,
+    );
+
+    shader.setFloat(
+      4,
+      bgSize.width,
+    );
+
+    shader.setFloat(
+      5,
+      bgSize.height,
+    );
+
+    shader.setFloat(
+      6,
+      intensity,
+    );
+
+    shader.setFloat(
+      7,
+      borderRadius,
+    );
+
+    shader.setFloat(
+      8,
+      edgeMargin,
+    );
+
+    shader.setImageSampler(
+      0,
+      image,
+    );
+
+    final paint =
+        Paint()..shader = shader;
+
+    canvas.drawRect(
+      Offset.zero & size,
+      paint,
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _RefractionPainter oldDelegate) {
-    // 当属性更改时才重新对比，坐标刷新已由 super(repaint) 接管
-    return oldDelegate.image != image ||
-           oldDelegate.intensity != intensity ||
-           oldDelegate.bgSize != bgSize ||
-           oldDelegate.borderRadius != borderRadius ||
-           oldDelegate.edgeMargin != edgeMargin;
+  bool shouldRepaint(
+    covariant _RefractionPainter oldDelegate,
+  ) {
+    return
+        oldDelegate.image != image ||
+        oldDelegate.intensity !=
+            intensity ||
+        oldDelegate.bgSize != bgSize ||
+        oldDelegate.borderRadius !=
+            borderRadius ||
+        oldDelegate.edgeMargin !=
+            edgeMargin ||
+        oldDelegate.backgroundKey !=
+            backgroundKey;
   }
 }
 
 // ==========================================
-// 弹窗
+// 液态玻璃弹窗
 // ==========================================
 Future<T?> showLiquidGlassPopup<T>({
   required BuildContext context,
   required GlobalKey backgroundKey,
   required Widget child,
-  String shaderAssetPath = 'shaders/shader.frag',
+
+  String shaderAssetPath =
+      'shaders/shader.frag',
+
   double width = 320,
+
   double height = 460,
+
   double borderRadius = 32.0,
+
   double edgeMargin = 30.0,
+
   double refractionIntensity = 3,
+
   Color barrierColor = Colors.black12,
 
-  double mobileWidthThreshold = 600.0, 
-  double mobileHeightThreshold = 1000.0,
+  double mobileWidthThreshold = 600.0,
+
+  double mobileHeightThreshold =
+      1000.0,
 }) async {
+  // ------------------------------------------
+  // 确保 Shader 已加载
+  // ------------------------------------------
   if (_globalRefractionShader == null) {
-    await preloadLiquidGlassShader(assetPath: shaderAssetPath);
+    await preloadLiquidGlassShader(
+      assetPath: shaderAssetPath,
+    );
   }
 
-  final origImage = await captureBackground(context, backgroundKey);
-  
-  // 修改处：使用新的 SnapshotConfig 传参
-  final snapshotImage = origImage == null ? null : await processSnapshotImage(
-      origImage,
-      config: const SnapshotConfig(
-        blurSigma: 16.0,      // 模糊程度
-        darkenOpacity: 0.05,  // 变暗程度
-      ),
-    );
-    
-  final screenSize = MediaQuery.sizeOf(context);
+  // ------------------------------------------
+  // 捕获背景
+  // ------------------------------------------
+  final origImage =
+      await captureBackground(
+    context,
+    backgroundKey,
+  );
 
-  if (!context.mounted) return null;
+  // ------------------------------------------
+  // 对背景进行模糊
+  // ------------------------------------------
+  final snapshotImage =
+      origImage == null
+          ? null
+          : await processSnapshotImage(
+              origImage,
+              config:
+                  const SnapshotConfig(
+                blurSigma: 16.0,
+                darkenOpacity: 0.05,
+              ),
+            );
 
-  // 判断屏幕宽度和高度是否均小于一定值（判定为 iPhone/手机端）
-  final isMobile = screenSize.width < mobileWidthThreshold && 
-                   screenSize.height < mobileHeightThreshold;
+  // 原图不再需要。
+  origImage?.dispose();
 
+  final screenSize =
+      MediaQuery.sizeOf(context);
+
+  if (!context.mounted) {
+    return null;
+  }
+
+  // ------------------------------------------
+  // 判断是否使用 Mobile BottomSheet
+  // ------------------------------------------
+  final isMobile =
+      screenSize.width <
+              mobileWidthThreshold &&
+          screenSize.height <
+              mobileHeightThreshold;
+
+  // ==========================================
+  // 手机
+  // ==========================================
   if (isMobile) {
-    // 手机端：从屏幕底部冒出，宽度占据整个屏幕
     return showModalBottomSheet<T>(
       context: context,
+
       barrierColor: barrierColor,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true, 
+
+      backgroundColor:
+          Colors.transparent,
+
+      isScrollControlled: true,
+
       builder: (context) {
-        return Padding( // 👈 新增 Padding 包裹层
-          // 👈 动态获取键盘高度，并在底部撑开对应空间的 Padding
-          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom), 
-          child: LiquidGlassContainer(
-            width: double.infinity,
-            height: height,
-            borderRadius: borderRadius,
-            edgeMargin: edgeMargin,
-            backgroundImage: snapshotImage,            
-            refractionIntensity: refractionIntensity,
-            bgSize: screenSize,
-            child: child,
+        return Padding(
+          // 键盘弹出时让 BottomSheet
+          // 自动避开键盘。
+          padding:
+              EdgeInsets.only(
+            bottom:
+                MediaQuery.viewInsetsOf(
+              context,
+            ).bottom,
           ),
-        );
-      },
-    );
-  } else {
-    // 否则（桌面端/平板端）：保持不变，居中显示
-    return showDialog<T>(
-      context: context,
-      barrierColor: barrierColor,
-      builder: (context) {
-        return Center(
-          child: LiquidGlassContainer(
-            width: width,
-            height: height,
-            borderRadius: borderRadius,
-            edgeMargin: edgeMargin,
-            backgroundImage: snapshotImage,            
-            refractionIntensity: refractionIntensity,
-            bgSize: screenSize,
-            child: child,
+
+          child:
+              LiquidGlassContainer(
+            width:
+                double.infinity,
+
+            height:
+                height,
+
+            borderRadius:
+                borderRadius,
+
+            edgeMargin:
+                edgeMargin,
+
+            backgroundImage:
+                snapshotImage,
+
+            refractionIntensity:
+                refractionIntensity,
+
+            bgSize:
+                screenSize,
+
+            child:
+                child,
           ),
         );
       },
     );
   }
+
+  // ==========================================
+  // Desktop / Tablet
+  // ==========================================
+  return showDialog<T>(
+    context: context,
+
+    barrierColor: barrierColor,
+
+    builder: (context) {
+      return Center(
+        child:
+            LiquidGlassContainer(
+          width:
+              width,
+
+          height:
+              height,
+
+          borderRadius:
+              borderRadius,
+
+          edgeMargin:
+              edgeMargin,
+
+          backgroundImage:
+              snapshotImage,
+
+          refractionIntensity:
+              refractionIntensity,
+
+          bgSize:
+              screenSize,
+
+          child:
+              child,
+        ),
+      );
+    },
+  );
 }
 
-Future<ui.Image?> captureBackground(BuildContext context, GlobalKey backgroundKey) async {
+// ==========================================
+// 捕获 RenderRepaintBoundary
+// ==========================================
+Future<ui.Image?> captureBackground(
+  BuildContext context,
+  GlobalKey backgroundKey,
+) async {
   try {
-    final boundary = backgroundKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) return null;
+    final boundary =
+        backgroundKey.currentContext
+                ?.findRenderObject()
+            as RenderRepaintBoundary?;
 
-    final pixelRatio = View.of(context).devicePixelRatio;
-    return await boundary.toImage(pixelRatio: pixelRatio);
+    if (boundary == null) {
+      return null;
+    }
+
+    if (!boundary.attached) {
+      return null;
+    }
+
+    if (!boundary.hasSize) {
+      return null;
+    }
+
+    final pixelRatio =
+        View.of(context).devicePixelRatio;
+
+    return await boundary.toImage(
+      pixelRatio: pixelRatio,
+    );
   } catch (e) {
-    debugPrint("快照捕获失败: $e");
+    debugPrint(
+      '快照捕获失败: $e',
+    );
+
     return null;
   }
 }
