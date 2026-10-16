@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'dart:math';
+import 'package:flutter/scheduler.dart'; // Ticker
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -12,8 +13,8 @@ class SnapshotConfig {
   final double darkenOpacity;
 
   const SnapshotConfig({
-    this.blurSigma = 16.0,
-    this.darkenOpacity = 0.05,
+    this.blurSigma = 8.0,
+    this.darkenOpacity = 0.00,
   });
 
   @override
@@ -177,6 +178,11 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
 
   /// 当前是否已经安排了 post-frame 更新任务。
   bool _textureUpdateScheduled = false;
+
+  int _boundaryRetryCount = 0;
+
+  /// 允许的最大连续重试次数。
+  static const int _maxBoundaryRetries = 10;
 
   // ------------------------------------------
   // Painter Listenable 监听
@@ -380,6 +386,7 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
     final snapshotConfig = widget.snapshotConfig;
 
     bool success = false;
+    bool boundaryNotReady = false;
 
     try {
       // ==========================================
@@ -423,47 +430,52 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
       // ==========================================
       // 模式 B：从 RenderRepaintBoundary 生成纹理
       // ==========================================
-      else {
-        final boundaryKey =
-            widget.repaintBoundaryKey;
-
-        if (boundaryKey != null) {
+        if (widget.repaintBoundaryKey != null) {
           final boundary =
-              boundaryKey.currentContext
+              widget.repaintBoundaryKey!.currentContext
                   ?.findRenderObject()
               as RenderRepaintBoundary?;
 
-          if (
-            boundary != null &&
-            boundary.attached &&
-            boundary.hasSize
-          ) {
+          if (boundary == null ||
+              !boundary.attached ||
+              !boundary.hasSize) {
+            // 边界根本还不存在 / 未 attach / 没尺寸。
+            boundaryNotReady = true;
+          } else if (boundary.layer == null) {
+            // 【关键】toImage 内部会执行 `layer!`。
+            // layer 为 null 时就会抛
+            // "Null check operator used on a null value"。
+            //
+            // 注意：绝对不要用 boundary.debugNeedsPaint！
+            // 那个 getter 只在 debug 下有效，
+            // release / profile 下会抛 LateInitializationError。
+            boundaryNotReady = true;
+          } else {
             final bgSize = boundary.size;
 
-            // 保留旧版本限制：
-            // 最多使用 1.2 倍像素比例，
-            // 避免截图过大影响流畅度。
+            // 保留旧版本限制：最多 1.2 倍像素比。
             final dpr =
-                MediaQuery.of(context)
-                    .devicePixelRatio;
+                MediaQuery.of(context).devicePixelRatio;
 
-            final targetRatio = min(
-              dpr,
-              1.2,
-            );
+            final targetRatio = min(dpr, 1.2);
 
-            rawImage =
-                await boundary.toImage(
-              pixelRatio: targetRatio,
-            );
+            try {
+              rawImage = await boundary.toImage(
+                pixelRatio: targetRatio,
+              );
 
-            // 真实 Boundary 的尺寸优先作为背景尺寸。
-            if (bgSize != _lastBgSize) {
-              _lastBgSize = bgSize;
+              // 真实 Boundary 的尺寸优先作为背景尺寸。
+              if (bgSize != _lastBgSize) {
+                _lastBgSize = bgSize;
+              }
+            } catch (e) {
+              // layer 可能在 await 期间被销毁（边界被移除等）。
+              // 静默处理，别刷日志。
+              boundaryNotReady = true;
+              rawImage = null;
             }
           }
         }
-      }
 
       // ==========================================
       // 对生成的图片进行后处理
@@ -513,27 +525,35 @@ class _LiquidGlassScopeState extends State<LiquidGlassScope> {
       debugPrintStack(
         stackTrace: stackTrace,
       );
-    } finally {
+        } finally {
       picture?.dispose();
       rawImage?.dispose();
       finalImage?.dispose();
 
       _isGeneratingTexture = false;
 
-      // 当前生成期间发生了新的更新：
-      // 再捕获最新状态。
-      //
-      // 如果第一次截图失败，
-      // 例如 RenderRepaintBoundary 尚未完成 Paint，
-      // 也会自动在下一帧继续尝试。
-      if (
-        mounted &&
-        (
-          _textureDirty ||
-          (!success && _bgImage == null)
-        )
-      ) {
+      if (!mounted) return;  // 注意：finally 里这样写没问题
+
+      if (_textureDirty) {
+        // 生成期间确实收到了新的更新请求 → 立即再捕获一次。
+        _boundaryRetryCount = 0;
         _requestTextureUpdate();
+      } else if (success) {
+        // 成功 → 重置计数。
+        _boundaryRetryCount = 0;
+      } else if (
+        boundaryNotReady &&
+        _boundaryRetryCount < _maxBoundaryRetries
+      ) {
+        // 边界暂时未就绪 → 限次重试。
+        // 这是 Drawer 动画、首帧等场景下的正常情况。
+        _boundaryRetryCount++;
+        _requestTextureUpdate();
+      } else {
+        // 其它失败 / 重试次数超限：
+        // 保留上一次成功的 _bgImage（不清空），
+        // 等下一次交互 / 尺寸变化 / 滚动自然触发。
+        _boundaryRetryCount = 0;
       }
     }
   }
@@ -715,150 +735,196 @@ class LiquidGlassContainer
 }
 
 class _LiquidGlassContainerState
-    extends State<LiquidGlassContainer> {
+    extends State<LiquidGlassContainer>
+    with SingleTickerProviderStateMixin {
   /// State 生命周期内保持同一个 Key。
-  final GlobalKey _containerKey =
-      GlobalKey();
+  final GlobalKey _containerKey = GlobalKey();
+
+  /// 用来通知 painter「容器位置变了」。
+  final _PositionChangeNotifier _positionChangeNotifier =
+      _PositionChangeNotifier();
+
+  /// 上一帧记录的容器全局坐标。
+  Offset? _lastGlobalPosition;
+
+  /// 连续多少帧位置不变后就暂停 Ticker（约 0.5s @60fps）。
+  static const int _stableFramesBeforePause = 30;
+
+  /// 连续稳定的帧数。
+  int _stableFrames = 0;
+
+  late final Ticker _positionTicker;
+
+  _MergedListenable? _repaintListenable;
+
+  @override
+  void initState() {
+    super.initState();
+    _positionTicker = createTicker(_onPositionTick);
+    _positionTicker.start();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scrollPosition = Scrollable.maybeOf(context)?.position;
+    _repaintListenable = _MergedListenable([
+      if (scrollPosition != null) scrollPosition,
+      _positionChangeNotifier,
+    ]);
+  }
+
+  /// 唤醒 Ticker（重置稳定计数）。
+  void _wakeUpTicker() {
+    _stableFrames = 0;
+    if (!_positionTicker.isActive) {
+      _positionTicker.start();
+    }
+  }
+
+  void _onPositionTick(Duration _) {
+    if (!mounted) return;
+
+    // 空闲太久 → 暂停自身，避免空转。
+    if (_stableFrames >= _stableFramesBeforePause) {
+      _positionTicker.stop();
+      return;
+    }
+
+    final renderBox =
+        _containerKey.currentContext?.findRenderObject() as RenderBox?;
+
+    if (renderBox == null || !renderBox.attached || !renderBox.hasSize) {
+      return;
+    }
+
+    final position = renderBox.localToGlobal(Offset.zero);
+
+    if (_lastGlobalPosition != position) {
+      // 位置变了：重置稳定计数 + 通知 painter 重绘。
+      _lastGlobalPosition = position;
+      _stableFrames = 0;
+      _positionChangeNotifier.notify();
+    } else {
+      _stableFrames++;
+    }
+  }
+
+  @override
+  void dispose() {
+    _positionTicker.dispose();
+    _positionChangeNotifier.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Shader 尚未加载时异步加载。
     if (_globalRefractionShader == null) {
       preloadLiquidGlassShader();
     }
 
-    final scopeData =
-        LiquidGlassScope.of(context);
+    final scopeData = LiquidGlassScope.of(context);
 
-    // 手动传入优先；
-    // 否则从 Scope 获取。
     final effectiveImage =
-        widget.backgroundImage ??
-            scopeData?.backgroundImage;
+        widget.backgroundImage ?? scopeData?.backgroundImage;
 
-    // 手动传入优先；
-    // 否则从 Scope 获取。
     final effectiveBgSize =
         widget.bgSize ??
             scopeData?.bgSize ??
             MediaQuery.sizeOf(context);
 
-    // ------------------------------------------
-    // 圆角兼容
-    //
-    // 传入：
-    //     borderRadius < 0
-    //     或 borderRadius == infinity
-    //
-    // 自动按高度的一半处理。
-    // 保留旧版本接口语义。
-    // ------------------------------------------
-    double effectiveRadius =
-        widget.borderRadius;
-
-    if (
-      effectiveRadius < 0 ||
-      effectiveRadius == double.infinity
-    ) {
-      effectiveRadius =
-          widget.height != double.infinity
-              ? widget.height / 2
-              : 32.0;
+    double effectiveRadius = widget.borderRadius;
+    if (effectiveRadius < 0 || effectiveRadius == double.infinity) {
+      effectiveRadius = widget.height != double.infinity
+          ? widget.height / 2
+          : 32.0;
     }
 
-    // ------------------------------------------
-    // 监听最近的 Scrollable
-    //
-    // ScrollPosition 本身是 Listenable。
-    //
-    // 将它传给 _RefractionPainter 的 repaint，
-    // 即可在滚动时仅重绘 Painter，
-    // 不需要重新 build 整棵 Widget Tree。
-    // ------------------------------------------
-    final scrollPosition =
-        Scrollable.maybeOf(context)?.position;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double? width = widget.width == double.infinity
+            ? (constraints.maxWidth.isFinite ? constraints.maxWidth : null)
+            : widget.width;
 
-    return SizedBox(
-      key: _containerKey,
-      width: widget.width,
-      height: widget.height,
+        final double? height = widget.height == double.infinity
+            ? (constraints.maxHeight.isFinite ? constraints.maxHeight : null)
+            : widget.height;
 
-      child: ClipRRect(
-        borderRadius:
-            BorderRadius.circular(
-          effectiveRadius,
-        ),
+        // 外层包一层 Listener：任何触摸都会唤醒位置轮询。
+        // 覆盖「用户松手 → 抽屉继续惯性/自动滑出」之后的短暂窗口。
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (_) => _wakeUpTicker(),
+          onPointerMove: (_) => _wakeUpTicker(),
+          onPointerUp: (_) => _wakeUpTicker(),
 
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(
-            sigmaX: 16,
-            sigmaY: 16,
-          ),
-
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius:
-                  BorderRadius.circular(
-                effectiveRadius,
-              ),
-
-              color:
-                  Colors.white.withOpacity(
-                0.12,
-              ),
-            ),
-
-            child: Stack(
-              children: [
-                // ==========================================
-                // Shader 背景
-                // ==========================================
-                if (
-                  _globalRefractionShader !=
-                          null &&
-                  effectiveImage != null
-                )
-                  Positioned.fill(
-                    child: CustomPaint(
-                      painter:
-                          _RefractionPainter(
-                        shader:
-                            _globalRefractionShader!,
-                        image:
-                            effectiveImage,
-                        intensity:
-                            widget
-                                .refractionIntensity,
-                        containerKey:
-                            _containerKey,
-                        backgroundKey:
-                            scopeData
-                                ?.boundaryKey,
-                        bgSize:
-                            effectiveBgSize,
-                        borderRadius:
-                            effectiveRadius,
-                        edgeMargin:
-                            widget.edgeMargin /
-                                1.5,
-
-                        // 绑定 ScrollPosition。
-                        repaint:
-                            scrollPosition,
-                      ),
-                    ),
+          child: SizedBox(
+            key: _containerKey,
+            width: width,
+            height: height,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(effectiveRadius),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(effectiveRadius),
+                    color: Colors.white.withOpacity(0.12),
                   ),
-
-                // ==========================================
-                // 实际内容
-                // ==========================================
-                widget.child,
-              ],
+                  child: Stack(
+                    children: [
+                      if (_globalRefractionShader != null &&
+                          effectiveImage != null)
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: _RefractionPainter(
+                              shader: _globalRefractionShader!,
+                              image: effectiveImage,
+                              intensity: widget.refractionIntensity,
+                              containerKey: _containerKey,
+                              backgroundKey: scopeData?.boundaryKey,
+                              bgSize: effectiveBgSize,
+                              borderRadius: effectiveRadius,
+                              edgeMargin: widget.edgeMargin / 1.5,
+                              repaint: _repaintListenable,
+                            ),
+                          ),
+                        ),
+                      widget.child,
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
+  }
+}
+
+/// 手动触发 notify 的 ChangeNotifier。
+class _PositionChangeNotifier extends ChangeNotifier {
+  void notify() => notifyListeners();
+}
+
+/// 合并多个 Listenable 为一个（scrollPosition + 位置变化）。
+class _MergedListenable extends Listenable {
+  _MergedListenable(this._sources);
+  final List<Listenable> _sources;
+
+  @override
+  void addListener(VoidCallback listener) {
+    for (final source in _sources) {
+      source.addListener(listener);
+    }
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    for (final source in _sources) {
+      source.removeListener(listener);
+    }
   }
 }
 
@@ -1101,8 +1167,8 @@ Future<T?> showLiquidGlassPopup<T>({
               origImage,
               config:
                   const SnapshotConfig(
-                blurSigma: 16.0,
-                darkenOpacity: 0.05,
+                blurSigma: 8.0,
+                darkenOpacity: 0.00,
               ),
             );
 
